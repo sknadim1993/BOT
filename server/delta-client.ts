@@ -61,16 +61,16 @@ export class DeltaClient {
 
   private generateSignature(method: string, endpoint: string, timestamp: string, payload: string = ''): string {
     // Delta Exchange signature format: METHOD + TIMESTAMP + ENDPOINT_PATH + PAYLOAD
-    // IMPORTANT: Use Hex encoding, not default toString()
-    const message = method + timestamp + endpoint + payload;
+    // Use uppercase method and Hex encoding
+    const message = method.toUpperCase() + timestamp + endpoint + payload;
     const signature = crypto.HmacSHA256(message, this.apiSecret).toString(crypto.enc.Hex);
     
     console.log(`[DEBUG] Signature generation:`, {
-      method,
+      method: method.toUpperCase(),
       endpoint,
       timestamp,
       payloadLength: payload.length,
-      message: message.substring(0, 100) + '...',
+      messagePreview: message.substring(0, 100) + '...',
       signaturePreview: signature.substring(0, 20) + '...'
     });
     
@@ -78,13 +78,15 @@ export class DeltaClient {
   }
 
   private async request(method: string, endpoint: string, data?: any) {
-    const payload = data ? JSON.stringify(data) : '';
-    const timestamp = Math.floor(Date.now() / 1000).toString();
+    // For GET requests, don't include payload in signature
+    const payload = (method.toUpperCase() === 'GET') ? '' : (data ? JSON.stringify(data) : '');
+    // Use milliseconds timestamp
+    const timestamp = Math.floor(Date.now()).toString();
     const signature = this.generateSignature(method, endpoint, timestamp, payload);
 
     try {
       console.log(`[DEBUG] Delta API Request:`, {
-        method,
+        method: method.toUpperCase(),
         url: endpoint,
         timestamp,
         hasData: !!data
