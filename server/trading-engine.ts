@@ -81,7 +81,7 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
     // Calculate quantity with leverage
     // Available balance * leverage / entry price = position size
     const positionValue = balanceToUse * settings.leverage;
-    const quantity = Number((positionValue / signal.entryPrice).toFixed(8));
+    const quantity = Math.floor(positionValue / signal.entryPrice);
 
     console.log(`Calculated quantity: ${quantity} (Position value: ${positionValue}, Entry: ${signal.entryPrice})`);
 
