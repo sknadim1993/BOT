@@ -27,20 +27,46 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
 
     // Get wallet balances
     const balances = await deltaClient.getWalletBalance();
+    console.log("Wallet balances received:", JSON.stringify(balances, null, 2));
+    
     // Handle if balances is array or object
     const balanceArray = Array.isArray(balances) ? balances : (balances?.balances || []);
-    const inrBalance = balanceArray.find((b: any) => b.asset_symbol === "INR" || b.asset === "INR");
-    const usdBalance = balanceArray.find((b: any) => b.asset_symbol === "USD" || b.asset === "USD");
-    const collateral = inrBalance || usdBalance || balanceArray[0];
+    
+    // Find USDT or INR balance (common collateral assets on Delta Exchange)
+    const usdtBalance = balanceArray.find((b: any) => 
+      b.asset_symbol === "USDT" || b.asset_symbol === "USDC"
+    );
+    const inrBalance = balanceArray.find((b: any) => 
+      b.asset_symbol === "INR"
+    );
+    const usdBalance = balanceArray.find((b: any) => 
+      b.asset_symbol === "USD"
+    );
+    
+    const collateral = usdtBalance || inrBalance || usdBalance || balanceArray[0];
 
-    if (!collateral || parseFloat(collateral.balance || "0") <= 0) {
+    if (!collateral) {
+      console.error("No collateral balance found, aborting trade.");
+      return null;
+    }
+
+    // Use available_balance field as per Delta Exchange docs
+    const availableBalanceRaw = parseFloat(
+      collateral.available_balance || collateral.balance || "0"
+    );
+
+    console.log(`Collateral asset: ${collateral.asset_symbol}, Available: ${availableBalanceRaw}`);
+
+    if (availableBalanceRaw <= 0) {
       console.error("Insufficient collateral balance, aborting trade.");
       return null;
     }
 
-    const availableBalance = parseFloat(collateral.balance) * (settings.balanceAllocation / 100);
+    // Calculate balance to use for this trade
+    const balanceToUse = availableBalanceRaw * (settings.balanceAllocation / 100);
+    console.log(`Balance to use: ${balanceToUse} (${settings.balanceAllocation}% of ${availableBalanceRaw})`);
 
-    // Get product info (use deltaClient.getProducts)
+    // Get product info
     const products = await deltaClient.getProducts();
     const product = products.find((p: any) => p.symbol === signal.recommendedAsset);
     if (!product) {
@@ -49,20 +75,35 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
     }
 
     // Set leverage for this product
+    console.log(`Setting leverage to ${settings.leverage}x`);
     await deltaClient.setProductLeverage(settings.leverage);
 
-    // Calculate quantity: simple form = availableBalance / entryPrice
-    const quantity = Number((availableBalance / signal.entryPrice).toFixed(8));
+    // Calculate quantity with leverage
+    // Available balance * leverage / entry price = position size
+    const positionValue = balanceToUse * settings.leverage;
+    const quantity = Number((positionValue / signal.entryPrice).toFixed(8));
+
+    console.log(`Calculated quantity: ${quantity} (Position value: ${positionValue}, Entry: ${signal.entryPrice})`);
+
+    if (quantity <= 0) {
+      console.error("Calculated quantity is zero or negative, aborting trade.");
+      return null;
+    }
 
     const side = signal.direction === "long" ? "buy" : "sell";
     let orderResult: any = null;
+    
     try {
+      console.log(`Placing ${side} order: ${quantity} @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`);
+      
       orderResult = await deltaClient.placeMarketOrderWithBracket(
         quantity,
         side,
         signal.stopLoss.toString(),
         signal.takeProfit.toString()
       );
+      
+      console.log("Order placed successfully:", JSON.stringify(orderResult, null, 2));
     } catch (err: any) {
       console.error("Failed to place Delta order:", err?.message || err);
       console.error("Delta error body:", err?.response?.data || err);
