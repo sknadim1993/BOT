@@ -244,13 +244,13 @@ export function getDeltaClient(): DeltaClient {
     console.log('[DEBUG] Initializing Delta Exchange client:', {
       apiKeyPreview: apiKey.substring(0, 10) + '...',
       apiSecretPreview: apiSecret.substring(0, 10) + '...',
-      baseURL: 'https://api.delta.exchange'
+      baseURL: 'https://api.india.delta.exchange'
     });
     
     deltaClientInstance = new DeltaClient({
       apiKey,
       apiSecret,
-      baseURL: 'https://api.delta.exchange',
+      baseURL: 'https://api.india.delta.exchange',
     });
   }
   return deltaClientInstance;
