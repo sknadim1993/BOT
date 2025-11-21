@@ -97,7 +97,7 @@ export async function researchMarkets(tradingMode: TradingMode) {
         });
 
         // Small delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 50));
       } catch (error) {
         console.error(`Error fetching data for ${symbol}:`, error);
       }
