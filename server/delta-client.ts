@@ -28,90 +28,88 @@ interface Position {
 
 let deltaClientInstance: any = null;
 const BASE_URL = 'https://api.india.delta.exchange';
+const SYMBOL = 'ETHUSD';            // ⚠ Your app supports only ETHUSD
+let PRODUCT_ID: number | null = null;
+
+async function initProduct() {
+  if (PRODUCT_ID) return PRODUCT_ID;
+
+  console.log(`[DEBUG] Fetching product ID for ${SYMBOL}`);
+  const url = `${BASE_URL}/v2/products/${SYMBOL}`;
+  const response = await axios.get(url);
+  PRODUCT_ID = response.data.result.id;
+  console.log(`[DEBUG] ETHUSD PRODUCT ID = ${PRODUCT_ID}`);
+  return PRODUCT_ID;
+}
 
 async function getDeltaClient() {
   if (!deltaClientInstance) {
     const apiKey = process.env.DELTA_API_KEY;
     const apiSecret = process.env.DELTA_API_SECRET;
-    
+
     if (!apiKey || !apiSecret) {
       throw new Error('Missing DELTA_API_KEY or DELTA_API_SECRET environment variables');
     }
-    
+
     console.log('[DEBUG] Initializing Delta Exchange client with official SDK');
     deltaClientInstance = await DeltaRestClient(apiKey, apiSecret);
+    await initProduct();
   }
   return deltaClientInstance;
 }
 
-// Get historical OHLCV data using direct API call
-async function getOHLCV(symbol: string, resolution: string, from: number, to: number): Promise<OHLCVData> {
+/* -------------------- OHLCV (ETHUSD ONLY) -------------------- */
+async function getOHLCV(resolution: string, from: number, to: number): Promise<OHLCVData> {
   try {
+    const productId = await initProduct();
     const url = `${BASE_URL}/v2/history/candles`;
+
     const params = {
-      resolution,
-      symbol,
+      resolution: resolution.toLowerCase(), // fix 1H -> 1h, 1D -> 1d
+      product_id: productId,
       start: from.toString(),
-      end: to.toString()
+      end: to.toString(),
     };
-    
+
     const response = await axios.get(url, { params });
-    
+
     return {
-      symbol,
+      symbol: SYMBOL,
       resolution,
       data: response.data.result || [],
     };
   } catch (error: any) {
-    console.error(`Error fetching OHLCV for ${symbol}:`, error.message);
+    console.error(`Error fetching OHLCV for ${SYMBOL}:`, error.message);
     throw error;
   }
 }
 
-// Get orderbook depth
-async function getOrderbook(symbol: string): Promise<OrderbookData> {
+/* -------------------- ORDERBOOK -------------------- */
+async function getOrderbook(): Promise<OrderbookData> {
   const client = await getDeltaClient();
-  const response = await client.apis.Orderbook.getL2Orderbook({ symbol });
-  
+  const response = await client.apis.Orderbook.getL2Orderbook({ symbol: SYMBOL });
   const result = JSON.parse(response.data.toString());
+
   return {
-    symbol,
+    symbol: SYMBOL,
     buy: result.result?.buy || [],
     sell: result.result?.sell || [],
   };
 }
 
-// Get all available products
-async function getProducts() {
-  const client = await getDeltaClient();
-  const response = await client.apis.Products.getProducts();
-  const result = JSON.parse(response.data.toString());
-  return result.result || [];
-}
-
-// Get product by symbol using direct API call
-async function getProductBySymbol(symbol: string) {
-  try {
-    const url = `${BASE_URL}/v2/products/${symbol}`;
-    const response = await axios.get(url);
-    return response.data.result;
-  } catch (error: any) {
-    console.error(`Error fetching product ${symbol}:`, error.message);
-    throw error;
-  }
-}
-
-// Get account positions
+/* -------------------- POSITIONS -------------------- */
 async function getPositions(): Promise<Position[]> {
+  await getDeltaClient();
   const client = await getDeltaClient();
   const response = await client.apis.Positions.getPositions();
   const result = JSON.parse(response.data.toString());
   return result.result || [];
 }
 
-// Set product leverage
-async function setProductLeverage(productId: number, leverage: number) {
+/* -------------------- LEVERAGE -------------------- */
+async function setProductLeverage(leverage: number) {
   const client = await getDeltaClient();
+  const productId = await initProduct();
   const response = await client.apis.Orders.setLeverage({
     product_id: productId,
     leverage: leverage.toString()
@@ -119,35 +117,10 @@ async function setProductLeverage(productId: number, leverage: number) {
   return JSON.parse(response.data.toString());
 }
 
-// Place market order with bracket SL/TP
-async function placeMarketOrderWithBracket(
-  productId: number,
-  size: number,
-  side: 'buy' | 'sell',
-  stopLoss: string,
-  takeProfit: string
-) {
+/* -------------------- PLACE ORDERS -------------------- */
+async function placeMarketOrder(size: number, side: 'buy' | 'sell') {
   const client = await getDeltaClient();
-  
-  const orderData: any = {
-    product_id: productId,
-    size,
-    side,
-    order_type: 'market_order',
-    time_in_force: 'ioc',
-  };
-
-  // Add bracket orders
-  orderData.bracket_stop_loss_price = stopLoss;
-  orderData.bracket_take_profit_price = takeProfit;
-  
-  const response = await client.apis.Orders.placeOrder({ order: orderData });
-  return JSON.parse(response.data.toString());
-}
-
-// Place a market order
-async function placeMarketOrder(productId: number, size: number, side: 'buy' | 'sell') {
-  const client = await getDeltaClient();
+  const productId = await initProduct();
   const response = await client.apis.Orders.placeOrder({
     order: {
       product_id: productId,
@@ -157,21 +130,35 @@ async function placeMarketOrder(productId: number, size: number, side: 'buy' | '
       time_in_force: 'ioc',
     }
   });
-  
+
   return JSON.parse(response.data.toString());
 }
 
-// Get order status
-async function getOrderStatus(orderId: string) {
+async function placeMarketOrderWithBracket(
+  size: number,
+  side: 'buy' | 'sell',
+  stopLoss: string,
+  takeProfit: string
+) {
   const client = await getDeltaClient();
-  const response = await client.apis.Orders.getOrder({ id: orderId });
-  const result = JSON.parse(response.data.toString());
-  return result.result;
+  const productId = await initProduct();
+
+  const orderData: any = {
+    product_id: productId,
+    size,
+    side,
+    order_type: 'market_order',
+    time_in_force: 'ioc',
+    bracket_stop_loss_price: stopLoss,
+    bracket_take_profit_price: takeProfit,
+  };
+
+  const response = await client.apis.Orders.placeOrder({ order: orderData });
+  return JSON.parse(response.data.toString());
 }
 
-// Place a limit order
+/* -------------------- LIMIT ORDER -------------------- */
 async function placeLimitOrder(
-  productId: number,
   size: number,
   price: string,
   side: 'buy' | 'sell',
@@ -179,7 +166,8 @@ async function placeLimitOrder(
   takeProfit?: string
 ) {
   const client = await getDeltaClient();
-  const orderData: any = {
+  const productId = await initProduct();
+  const order: any = {
     product_id: productId,
     size,
     limit_price: price,
@@ -188,25 +176,21 @@ async function placeLimitOrder(
     time_in_force: 'gtc',
   };
 
-  if (stopLoss) {
-    orderData.bracket_stop_loss_price = stopLoss;
-  }
-  if (takeProfit) {
-    orderData.bracket_take_profit_price = takeProfit;
-  }
-  
-  const response = await client.apis.Orders.placeOrder({ order: orderData });
+  if (stopLoss) order.bracket_stop_loss_price = stopLoss;
+  if (takeProfit) order.bracket_take_profit_price = takeProfit;
+
+  const response = await client.apis.Orders.placeOrder({ order });
   return JSON.parse(response.data.toString());
 }
 
-// Cancel an order
+/* -------------------- CANCEL ORDER -------------------- */
 async function cancelOrder(orderId: string) {
   const client = await getDeltaClient();
   const response = await client.apis.Orders.deleteOrder({ id: orderId });
   return JSON.parse(response.data.toString());
 }
 
-// Get wallet balance
+/* -------------------- WALLET -------------------- */
 async function getWalletBalance() {
   const client = await getDeltaClient();
   const response = await client.apis.Wallet.getBalances();
@@ -214,24 +198,32 @@ async function getWalletBalance() {
   return result.result || [];
 }
 
-// Test connection
+/* -------------------- ORDER STATUS -------------------- */
+async function getOrderStatus(orderId: string) {
+  const client = await getDeltaClient();
+  const response = await client.apis.Orders.getOrder({ id: orderId });
+  const result = JSON.parse(response.data.toString());
+  return result.result;
+}
+
+/* -------------------- CONNECTION TEST -------------------- */
 async function testConnection(): Promise<boolean> {
   try {
     console.log('[DEBUG] Testing Delta Exchange connection...');
-    await getProducts();
-    console.log('[DEBUG] Connection test successful!');
+    await initProduct();
+    await getWalletBalance();
+    console.log('[DEBUG] Connection OK for ETHUSD');
     return true;
   } catch (error: any) {
-    console.error('[DEBUG] Connection test failed:', error.message);
+    console.error('[DEBUG] Connection failed:', error.message);
     return false;
   }
 }
 
+/* -------------------- EXPORT -------------------- */
 export const deltaClient = {
   getOHLCV,
   getOrderbook,
-  getProducts,
-  getProductBySymbol,
   getPositions,
   setProductLeverage,
   placeMarketOrder,
