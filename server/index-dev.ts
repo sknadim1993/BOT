@@ -59,5 +59,9 @@ export async function setupVite(app: Express, server: Server) {
 }
 
 (async () => {
+  // Import and start scheduler
+  const { startScheduler } = await import("./scheduler");
+  startScheduler();
+  
   await runApp(setupVite);
 })();
