@@ -100,7 +100,9 @@ export async function getPositions() {
 export async function getWalletBalance() {
   const client = await getDeltaClient();
   const res = await client.apis.Wallet.getBalances();
-  return res?.data?.result || res?.result || res;
+  const actualData = res?.body?.result || res?.obj?.result || res?.data?.result || res?.result || res;
+  
+  return actualData;
 }
 
 /* ---------------- SET LEVERAGE ---------------- */
