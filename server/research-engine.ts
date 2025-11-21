@@ -6,6 +6,7 @@ import type { TradingMode } from '@shared/schema';
 interface MarketResearch {
   symbol: string;
   price: number;
+  volume: number;
   volatility: number;
   orderbook: any;
   ohlcv: any[];
@@ -79,6 +80,7 @@ export async function researchMarkets(tradingMode: TradingMode) {
 
         // Calculate volume
         const recentCandles = ohlcvData[primaryTimeframe] || [];
+        const volume =0;
 
         marketData.push({
           symbol,
