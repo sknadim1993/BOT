@@ -80,9 +80,6 @@ export async function researchMarkets(tradingMode: TradingMode) {
 
         // Calculate volume
         const recentCandles = ohlcvData[primaryTimeframe] || [];
-        const volume = recentCandles.length > 0 
-          ? recentCandles.reduce((sum: number, candle: any) => sum + (candle.volume || 0), 0) / recentCandles.length
-          : 0;
 
         marketData.push({
           symbol,
