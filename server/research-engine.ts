@@ -13,7 +13,7 @@ interface MarketResearch {
 }
 
 const MAJOR_PERPETUALS = [
-  'ETHUSDT',
+  'ETHUSD',
 ];
 
 export async function fetchMultiTimeframeData(symbol: string): Promise<any> {
