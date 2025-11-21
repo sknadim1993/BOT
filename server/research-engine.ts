@@ -12,24 +12,41 @@ interface MarketResearch {
   ohlcv: any[];
 }
 
-const MAJOR_PERPETUALS = [
-  'ETHUSD',
-];
+const MAJOR_PERPETUALS = ['ETHUSD'];
+
+function getTimestampRange(resolution: string, candles = 150) {
+  const now = Math.floor(Date.now() / 1000);
+  const seconds =
+    resolution === '5m' ? 5 * 60 :
+    resolution === '15m' ? 15 * 60 :
+    resolution === '1h' ? 60 * 60 :
+    resolution === '1d' ? 24 * 60 * 60 :
+    5 * 60;
+
+  return {
+    from: now - candles * seconds,
+    to: now
+  };
+}
 
 export async function fetchMultiTimeframeData(symbol: string): Promise<any> {
-  const now = Math.floor(Date.now() / 1000);
   const timeframes = {
-    '5m': { resolution: '5m', from: now - 3600, to: now }, // Last hour
-    '15m': { resolution: '15m', from: now - 7200, to: now }, // Last 2 hours
-    '1H': { resolution: '1h', from: now - 86400, to: now }, // Last day
-    '1D': { resolution: '1d', from: now - 604800, to: now }, // Last week
+    '5m': { resolution: '5m', ...getTimestampRange('5m') },
+    '15m': { resolution: '15m', ...getTimestampRange('15m') },
+    '1H': { resolution: '1h', ...getTimestampRange('1h') },
+    '1D': { resolution: '1d', ...getTimestampRange('1d') },
   };
 
   const results: any = {};
 
   for (const [timeframe, config] of Object.entries(timeframes)) {
     try {
-      const data = await deltaClient.getOHLCV(symbol, config.resolution, config.from, config.to);
+      const data = await deltaClient.getOHLCV(
+        symbol,
+        config.resolution,
+        config.from,
+        config.to
+      );
       results[timeframe] = data.data;
     } catch (error) {
       console.error(`Error fetching ${timeframe} data for ${symbol}:`, error);
@@ -47,40 +64,30 @@ export async function calculateVolatility(ohlcvData: any[]): Promise<number> {
   for (let i = 1; i < ohlcvData.length; i++) {
     const prevClose = ohlcvData[i - 1].close;
     const currentClose = ohlcvData[i].close;
-    const returnVal = (currentClose - prevClose) / prevClose;
-    returns.push(returnVal);
+    returns.push((currentClose - prevClose) / prevClose);
   }
 
   const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
   const variance = returns.reduce((sum, ret) => sum + Math.pow(ret - mean, 2), 0) / returns.length;
-  const volatility = Math.sqrt(variance) * 100;
-
-  return volatility;
+  return Math.sqrt(variance) * 100;
 }
 
 export async function researchMarkets(tradingMode: TradingMode) {
   console.log(`Starting market research for ${tradingMode} mode...`);
-
   try {
     const marketData = [];
 
     for (const symbol of MAJOR_PERPETUALS) {
       try {
-        // Fetch multi-timeframe OHLCV data
         const ohlcvData = await fetchMultiTimeframeData(symbol);
+        const orderbook = await deltaClient.getOrderbook();
 
-        // Fetch orderbook
-        const orderbook = await deltaClient.getOrderbook(symbol);
-
-        // Calculate volatility from primary timeframe
-        const primaryTimeframe = tradingMode === 'scalping' ? '5m' : 
+        const primaryTimeframe = tradingMode === 'scalping' ? '5m' :
                                  tradingMode === 'intraday' ? '15m' :
                                  tradingMode === 'swing' ? '1H' : '1D';
-        const volatility = await calculateVolatility(ohlcvData[primaryTimeframe] || []);
 
-        // Calculate volume
-        const recentCandles = ohlcvData[primaryTimeframe] || [];
-        const volume =0;
+        const volatility = await calculateVolatility(ohlcvData[primaryTimeframe] || []);
+        const volume = 0;
 
         marketData.push({
           symbol,
@@ -94,23 +101,16 @@ export async function researchMarkets(tradingMode: TradingMode) {
           volatility,
         });
 
-        // Small delay to avoid rate limiting
         await new Promise(resolve => setTimeout(resolve, 50));
       } catch (error) {
         console.error(`Error fetching data for ${symbol}:`, error);
       }
     }
 
-    if (marketData.length === 0) {
-      console.error('No market data collected');
-      return null;
-    }
+    if (marketData.length === 0) return null;
 
-    // Analyze markets using Groq
-    console.log('Sending data to Groq for analysis...');
     const analysis = await analyzeMarkets(marketData, tradingMode);
 
-    // Save analysis to database
     await storage.createAnalysis({
       tradingMode,
       recommendedAsset: analysis.recommendedAsset,
@@ -123,7 +123,7 @@ export async function researchMarkets(tradingMode: TradingMode) {
       weakestAssets: analysis.weakestAssets,
       patternExplanation: analysis.patternExplanation,
       multiTimeframeReasoning: analysis.multiTimeframeReasoning,
-      marketData: marketData,
+      marketData,
     });
 
     console.log('Market analysis completed:', analysis.recommendedAsset, analysis.direction);
