@@ -27,13 +27,13 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
 
     // Get wallet balance
     const balances = await deltaClient.getWalletBalance();
-    const usdtBalance = balances.find((b: any) => b.asset_symbol === 'USDT');
-    if (!usdtBalance || parseFloat(usdtBalance.balance) === 0) {
-      console.error('Insufficient USDT balance');
+    const inrBalance = balances.find((b: any) => b.asset_symbol === 'INR');
+    if (!inrBalance || parseFloat(inrBalance.balance) === 0) {
+      console.error('Insufficient INR balance');
       return null;
     }
 
-    const availableBalance = parseFloat(usdtBalance.balance) * (settings.balanceAllocation / 100);
+    const availableBalance = parseFloat(inrBalance.balance) * (settings.balanceAllocation / 100);
 
     // Get product info
     const products = await deltaClient.getProducts();
@@ -62,8 +62,9 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
         signal.takeProfit.toString()
       );
       orderId = order.result?.id || null;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to place Delta order:', error);
+      console.error('Delta Exchange Error Details:', error.response?.data);
       return null;
     }
 
@@ -99,8 +100,9 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
 
     console.log(`Trade executed successfully: ${trade.id}`);
     return trade;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error executing trade:', error);
+    console.error('Delta Exchange Error Details:', error.response?.data);
     return null;
   }
 }
@@ -133,8 +135,9 @@ export async function monitorTrades() {
           await closeTrade(trade.id, exitPrice, status);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(`Error monitoring trade ${trade.id}:`, error);
+      console.error('Delta Exchange Error Details:', error.response?.data);
     }
   }
 }
@@ -184,8 +187,9 @@ export async function closeTrade(tradeId: string, exitPrice: number, status: str
     });
 
     console.log(`Trade closed: ${tradeId}, PnL: ${pnl.toFixed(2)}`);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error closing trade:', error);
+    console.error('Delta Exchange Error Details:', error.response?.data);
   }
 }
 
