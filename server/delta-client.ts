@@ -159,7 +159,7 @@ export async function placeMarketOrder(size: number, side: "buy" | "sell") {
   const res = await client.apis.Orders.placeOrder({
     order: {
       product_id: PRODUCT_ID,
-      size,
+      size: Math.floor(size), // Convert to integer (number of contracts)
       side,
       order_type: "market_order",
       time_in_force: "ioc",
@@ -181,7 +181,7 @@ export async function placeMarketOrderWithBracket(
   const res = await client.apis.Orders.placeOrder({
     order: {
       product_id: PRODUCT_ID,
-      size,
+      size: Math.floor(size), // Convert to integer (number of contracts)
       side,
       order_type: "market_order",
       time_in_force: "ioc",
