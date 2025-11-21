@@ -21,8 +21,8 @@ export async function fetchMultiTimeframeData(symbol: string): Promise<any> {
   const timeframes = {
     '5m': { resolution: '5m', from: now - 3600, to: now }, // Last hour
     '15m': { resolution: '15m', from: now - 7200, to: now }, // Last 2 hours
-    '1H': { resolution: '60', from: now - 86400, to: now }, // Last day
-    '1D': { resolution: '1D', from: now - 604800, to: now }, // Last week
+    '1H': { resolution: '1h', from: now - 86400, to: now }, // Last day
+    '1D': { resolution: '1d', from: now - 604800, to: now }, // Last week
   };
 
   const results: any = {};
