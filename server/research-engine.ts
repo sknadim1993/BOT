@@ -6,7 +6,6 @@ import type { TradingMode } from '@shared/schema';
 interface MarketResearch {
   symbol: string;
   price: number;
-  volume: number;
   volatility: number;
   orderbook: any;
   ohlcv: any[];
