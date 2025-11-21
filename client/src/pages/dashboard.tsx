@@ -72,7 +72,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-semibold font-mono ${totalPnl >= 0 ? 'text-chart-2' : 'text-destructive'}`} data-testid="text-pnl">
-              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} USDT
+              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} INR
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               {performance?.totalTrades || 0} trades executed
