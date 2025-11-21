@@ -27,10 +27,11 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
 
     // Get wallet balances
     const balances = await deltaClient.getWalletBalance();
-    // Attempt to find INR or USD collateral depending on exchange config
-    const inrBalance = balances.find((b: any) => b.asset_symbol === "INR" || b.asset === "INR");
-    const usdBalance = balances.find((b: any) => b.asset_symbol === "USD" || b.asset === "USD");
-    const collateral = inrBalance || usdBalance || balances[0];
+    // Handle if balances is array or object
+    const balanceArray = Array.isArray(balances) ? balances : (balances?.balances || []);
+    const inrBalance = balanceArray.find((b: any) => b.asset_symbol === "INR" || b.asset === "INR");
+    const usdBalance = balanceArray.find((b: any) => b.asset_symbol === "USD" || b.asset === "USD");
+    const collateral = inrBalance || usdBalance || balanceArray[0];
 
     if (!collateral || parseFloat(collateral.balance || "0") <= 0) {
       console.error("Insufficient collateral balance, aborting trade.");
@@ -47,9 +48,8 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       return null;
     }
 
-    // Set leverage for this product (use id / contract_id)
-    const productId = product.contract_id || product.id || product.product_id;
-    await deltaClient.setProductLeverage(productId, settings.leverage);
+    // Set leverage for this product
+    await deltaClient.setProductLeverage(settings.leverage);
 
     // Calculate quantity: simple form = availableBalance / entryPrice
     const quantity = Number((availableBalance / signal.entryPrice).toFixed(8));
@@ -58,7 +58,6 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
     let orderResult: any = null;
     try {
       orderResult = await deltaClient.placeMarketOrderWithBracket(
-        productId,
         quantity,
         side,
         signal.stopLoss.toString(),
