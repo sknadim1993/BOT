@@ -46,7 +46,7 @@ async function getDeltaClient() {
 // Get historical OHLCV data
 async function getOHLCV(symbol: string, resolution: string, from: number, to: number): Promise<OHLCVData> {
   const client = await getDeltaClient();
-  const response = await client.apis.Products.getL2Candles({
+  const response = await client.apis.Chart.getHistoricalData({
     resolution,
     symbol,
     start: from,
