@@ -1,4 +1,5 @@
 import DeltaRestClient from 'delta-rest-client';
+import axios from 'axios';
 
 interface OHLCVData {
   symbol: string;
@@ -27,6 +28,7 @@ interface Position {
 }
 
 let deltaClientInstance: any = null;
+const BASE_URL = 'https://api.india.delta.exchange';
 
 async function getDeltaClient() {
   if (!deltaClientInstance) {
@@ -43,22 +45,28 @@ async function getDeltaClient() {
   return deltaClientInstance;
 }
 
-// Get historical OHLCV data
+// Get historical OHLCV data using direct API call
 async function getOHLCV(symbol: string, resolution: string, from: number, to: number): Promise<OHLCVData> {
-  const client = await getDeltaClient();
-  const response = await client.apis.Chart.getHistoricalData({
-    resolution,
-    symbol,
-    start: from,
-    end: to
-  });
-  
-  const result = JSON.parse(response.data.toString());
-  return {
-    symbol,
-    resolution,
-    data: result.result || [],
-  };
+  try {
+    const url = `${BASE_URL}/v2/history/candles`;
+    const params = {
+      resolution,
+      symbol,
+      start: from.toString(),
+      end: to.toString()
+    };
+    
+    const response = await axios.get(url, { params });
+    
+    return {
+      symbol,
+      resolution,
+      data: response.data.result || [],
+    };
+  } catch (error: any) {
+    console.error(`Error fetching OHLCV for ${symbol}:`, error.message);
+    throw error;
+  }
 }
 
 // Get orderbook depth
@@ -80,6 +88,18 @@ async function getProducts() {
   const response = await client.apis.Products.getProducts();
   const result = JSON.parse(response.data.toString());
   return result.result || [];
+}
+
+// Get product by symbol using direct API call
+async function getProductBySymbol(symbol: string) {
+  try {
+    const url = `${BASE_URL}/v2/products/${symbol}`;
+    const response = await axios.get(url);
+    return response.data.result;
+  } catch (error: any) {
+    console.error(`Error fetching product ${symbol}:`, error.message);
+    throw error;
+  }
 }
 
 // Get account positions
@@ -168,6 +188,7 @@ export const deltaClient = {
   getOHLCV,
   getOrderbook,
   getProducts,
+  getProductBySymbol,
   getPositions,
   placeMarketOrder,
   placeLimitOrder,
