@@ -110,6 +110,42 @@ async function getPositions(): Promise<Position[]> {
   return result.result || [];
 }
 
+// Set product leverage
+async function setProductLeverage(productId: number, leverage: number) {
+  const client = await getDeltaClient();
+  const response = await client.apis.Orders.setLeverage({
+    product_id: productId,
+    leverage: leverage.toString()
+  });
+  return JSON.parse(response.data.toString());
+}
+
+// Place market order with bracket SL/TP
+async function placeMarketOrderWithBracket(
+  productId: number,
+  size: number,
+  side: 'buy' | 'sell',
+  stopLoss: string,
+  takeProfit: string
+) {
+  const client = await getDeltaClient();
+  
+  const orderData: any = {
+    product_id: productId,
+    size,
+    side,
+    order_type: 'market_order',
+    time_in_force: 'ioc',
+  };
+
+  // Add bracket orders
+  orderData.bracket_stop_loss_price = stopLoss;
+  orderData.bracket_take_profit_price = takeProfit;
+  
+  const response = await client.apis.Orders.placeOrder({ order: orderData });
+  return JSON.parse(response.data.toString());
+}
+
 // Place a market order
 async function placeMarketOrder(productId: number, size: number, side: 'buy' | 'sell') {
   const client = await getDeltaClient();
@@ -124,6 +160,14 @@ async function placeMarketOrder(productId: number, size: number, side: 'buy' | '
   });
   
   return JSON.parse(response.data.toString());
+}
+
+// Get order status
+async function getOrderStatus(orderId: string) {
+  const client = await getDeltaClient();
+  const response = await client.apis.Orders.getOrder({ id: orderId });
+  const result = JSON.parse(response.data.toString());
+  return result.result;
 }
 
 // Place a limit order
@@ -146,10 +190,10 @@ async function placeLimitOrder(
   };
 
   if (stopLoss) {
-    orderData.stop_loss_order = { stop_price: stopLoss };
+    orderData.bracket_stop_loss_price = stopLoss;
   }
   if (takeProfit) {
-    orderData.take_profit_order = { stop_price: takeProfit };
+    orderData.bracket_take_profit_price = takeProfit;
   }
   
   const response = await client.apis.Orders.placeOrder({ order: orderData });
@@ -190,9 +234,12 @@ export const deltaClient = {
   getProducts,
   getProductBySymbol,
   getPositions,
+  setProductLeverage,
   placeMarketOrder,
+  placeMarketOrderWithBracket,
   placeLimitOrder,
   cancelOrder,
   getWalletBalance,
+  getOrderStatus,
   testConnection,
 };
