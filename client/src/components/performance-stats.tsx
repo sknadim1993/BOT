@@ -57,7 +57,7 @@ export function PerformanceStats({ performance, isLoading }: PerformanceStatsPro
           <div className="space-y-1">
             <p className="text-sm text-muted-foreground">Total PnL</p>
             <p className={`text-2xl font-semibold font-mono ${totalPnl >= 0 ? 'text-chart-2' : 'text-destructive'}`} data-testid="text-total-pnl">
-              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} USDT
+              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} INR
             </p>
           </div>
 
@@ -70,14 +70,14 @@ export function PerformanceStats({ performance, isLoading }: PerformanceStatsPro
           <div className="space-y-1">
             <p className="text-sm text-muted-foreground">Largest Win</p>
             <p className="text-2xl font-semibold font-mono text-chart-2" data-testid="text-largest-win">
-              +{largestWin.toFixed(2)} USDT
+              +{largestWin.toFixed(2)} INR
             </p>
           </div>
 
           <div className="space-y-1">
             <p className="text-sm text-muted-foreground">Largest Loss</p>
             <p className="text-2xl font-semibold font-mono text-destructive" data-testid="text-largest-loss">
-              {largestLoss.toFixed(2)} USDT
+              {largestLoss.toFixed(2)} INR
             </p>
           </div>
         </div>
