@@ -1,7 +1,7 @@
 import DeltaRestClient from 'delta-rest-client';
 import axios from 'axios';
 
-interface OHLCVData {
+interface OHLCData {
   symbol: string;
   resolution: string;
   data: {
