@@ -80,21 +80,24 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
 
     // Calculate quantity with leverage
     // Available balance * leverage / entry price = position size
-    const positionValue = balanceToUse * settings.leverage;
-    const quantity = Math.floor(positionValue);
+    // Calculate max notional using leverage
+const availableNotional = balanceToUse * settings.leverage;
+const CONTRACT_VALUE = 0.01; // For ETHUSD perpetual
 
-    console.log(`Calculated quantity: ${quantity} (Position value: ${positionValue}, Entry: ${signal.entryPrice})`);
+// Convert notional → contract size
+const rawSize = availableNotional / (CONTRACT_VALUE * signal.entryPrice);
+const quantity = Math.floor(rawSize);
 
-    if (quantity <= 0) {
-      console.error("Calculated quantity is zero or negative, aborting trade.");
-      return null;
-    }
+console.log(`Calculated size (contracts): ${quantity} | Notional: ${availableNotional} | Entry: ${signal.entryPrice}`);
 
-    const side = signal.direction === "long" ? "buy" : "sell";
-    let orderResult: any = null;
-    
-    try {
-      console.log(`Placing ${side} order: ${quantity} @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`);
+if (quantity < 1) {
+  console.error("Not enough balance to open even 1 contract — aborting trade.");
+  return null;
+}
+
+const side = signal.direction === "long" ? "buy" : "sell";
+console.log(`Placing ${side} order: ${quantity} contracts @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`);
+
       
       orderResult = await deltaClient.placeMarketOrderWithBracket(
         quantity,
