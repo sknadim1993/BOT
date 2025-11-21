@@ -91,7 +91,7 @@ export default function TradeHistory() {
                         </TableCell>
                         <TableCell>
                           <div className={`font-mono font-semibold ${pnl >= 0 ? 'text-chart-2' : 'text-destructive'}`}>
-                            {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT
+                            {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} INR
                             <span className="text-xs ml-1">({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)</span>
                           </div>
                         </TableCell>
