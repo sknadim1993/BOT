@@ -13,16 +13,7 @@ interface MarketResearch {
 }
 
 const MAJOR_PERPETUALS = [
-  'BTCUSDT',
   'ETHUSDT',
-  'SOLUSDT',
-  'BNBUSDT',
-  'XRPUSDT',
-  'ADAUSDT',
-  'DOGEUSDT',
-  'DOTUSDT',
-  'MATICUSDT',
-  'LTCUSDT',
 ];
 
 export async function fetchMultiTimeframeData(symbol: string): Promise<any> {
