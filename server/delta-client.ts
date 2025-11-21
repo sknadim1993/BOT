@@ -81,7 +81,7 @@ export class DeltaClient {
     // For GET requests, don't include payload in signature
     const payload = (method.toUpperCase() === 'GET') ? '' : (data ? JSON.stringify(data) : '');
     // Use milliseconds timestamp
-    const timestamp = Math.floor(Date.now()).toString();
+    const timestamp = Math.floor(Date.now() / 1000).toString();
     const signature = this.generateSignature(method, endpoint, timestamp, payload);
 
     try {
