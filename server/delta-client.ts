@@ -46,19 +46,22 @@ const RESOLUTION_MAP: Record<string, string> = {
 
 export async function getOHLCV(
   symbol: string,
-  timeframe: "5m" | "15m" | "1h" | "1H" | "1d" | "1D"
+  timeframe: "5m" | "15m" | "1h" | "1H" | "1d" | "1D",
+  start: number,
+  end: number
 ) {
   const resolution = RESOLUTION_MAP[timeframe];
   if (!resolution) throw new Error(`Invalid resolution: ${timeframe}`);
 
-  const url = `${BASE_URL}/charts/v2/candles`;
+  const url = `${BASE_URL}/v2/history/candles`;
 
   try {
     const res = await axios.get(url, {
       params: {
-        symbol, // Only symbol supported
-        resolution, // Must be 5m / 15m / 1h / 1d
-        count: 250, // Latest candles
+        symbol,
+        resolution,
+        start,
+        end,
       },
     });
 
@@ -71,6 +74,12 @@ export async function getOHLCV(
     console.error(`❌ OHLC fetch failed ${symbol} ${resolution}`, err?.response?.data || err.message);
     return { symbol, timeframe, data: [] };
   }
+}
+
+/* ---------------- GET PRODUCTS ---------------- */
+export async function getProducts() {
+  const res = await axios.get(`${BASE_URL}/v2/products`);
+  return res?.data?.result || [];
 }
 
 /* ---------------- ORDERBOOK ---------------- */
@@ -174,6 +183,7 @@ export async function testConnection() {
 export const deltaClient = {
   initProduct,
   getOHLCV,
+  getProducts,
   getOrderbook,
   getPositions,
   getWalletBalance,
