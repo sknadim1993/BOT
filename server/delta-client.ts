@@ -59,10 +59,20 @@ export class DeltaClient {
     });
   }
 
-  private generateSignature(method: string, endpoint: string, payload: string = ''): string {
-    const timestamp = Math.floor(Date.now() / 1000).toString();
+  private generateSignature(method: string, endpoint: string, timestamp: string, payload: string = ''): string {
+    // Delta Exchange signature format: METHOD + TIMESTAMP + ENDPOINT_PATH + PAYLOAD
+    // IMPORTANT: Use Hex encoding, not default toString()
     const message = method + timestamp + endpoint + payload;
-    const signature = crypto.HmacSHA256(message, this.apiSecret).toString();
+    const signature = crypto.HmacSHA256(message, this.apiSecret).toString(crypto.enc.Hex);
+    
+    console.log(`[DEBUG] Signature generation:`, {
+      method,
+      endpoint,
+      timestamp,
+      payloadLength: payload.length,
+      message: message.substring(0, 100) + '...',
+      signaturePreview: signature.substring(0, 20) + '...'
+    });
     
     return signature;
   }
@@ -70,9 +80,16 @@ export class DeltaClient {
   private async request(method: string, endpoint: string, data?: any) {
     const payload = data ? JSON.stringify(data) : '';
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = this.generateSignature(method, endpoint, payload);
+    const signature = this.generateSignature(method, endpoint, timestamp, payload);
 
     try {
+      console.log(`[DEBUG] Delta API Request:`, {
+        method,
+        url: endpoint,
+        timestamp,
+        hasData: !!data
+      });
+
       const response = await this.client.request({
         method,
         url: endpoint,
@@ -86,13 +103,19 @@ export class DeltaClient {
 
       return response.data;
     } catch (error: any) {
-      console.error(`Delta API Error: ${error.message}`);
+      console.error(`Delta API Error [${method} ${endpoint}]:`, {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      });
       throw error;
     }
   }
 
   // Get historical OHLCV data
   async getOHLCV(symbol: string, resolution: string, from: number, to: number): Promise<OHLCVData> {
+    // Build endpoint with query params - this is what needs to be signed
     const endpoint = `/v2/history/candles?resolution=${resolution}&symbol=${symbol}&start=${from}&end=${to}`;
     const data = await this.request('GET', endpoint);
     
@@ -193,9 +216,12 @@ export class DeltaClient {
   // Test connection
   async testConnection(): Promise<boolean> {
     try {
+      console.log('[DEBUG] Testing Delta Exchange connection...');
       await this.getProducts();
+      console.log('[DEBUG] Connection test successful!');
       return true;
-    } catch (error) {
+    } catch (error: any) {
+      console.error('[DEBUG] Connection test failed:', error.message);
       return false;
     }
   }
@@ -212,6 +238,12 @@ export function getDeltaClient(): DeltaClient {
     if (!apiKey || !apiSecret) {
       throw new Error('Missing DELTA_API_KEY or DELTA_API_SECRET environment variables. Please configure your Delta Exchange credentials.');
     }
+    
+    console.log('[DEBUG] Initializing Delta Exchange client:', {
+      apiKeyPreview: apiKey.substring(0, 10) + '...',
+      apiSecretPreview: apiSecret.substring(0, 10) + '...',
+      baseURL: 'https://api.delta.exchange'
+    });
     
     deltaClientInstance = new DeltaClient({
       apiKey,
