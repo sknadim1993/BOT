@@ -25,24 +25,13 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       return null;
     }
 
-    // Get wallet balances
     const balances = await deltaClient.getWalletBalance();
     console.log("Wallet balances received:", JSON.stringify(balances, null, 2));
-    
-    // Handle if balances is array or object
     const balanceArray = Array.isArray(balances) ? balances : (balances?.balances || []);
-    
-    // Find USDT or INR balance (common collateral assets on Delta Exchange)
-    const usdtBalance = balanceArray.find((b: any) => 
-      b.asset_symbol === "USDT" || b.asset_symbol === "USDC"
-    );
-    const inrBalance = balanceArray.find((b: any) => 
-      b.asset_symbol === "INR"
-    );
-    const usdBalance = balanceArray.find((b: any) => 
-      b.asset_symbol === "USD"
-    );
-    
+
+    const usdtBalance = balanceArray.find((b: any) => b.asset_symbol === "USDT" || b.asset_symbol === "USDC");
+    const inrBalance = balanceArray.find((b: any) => b.asset_symbol === "INR");
+    const usdBalance = balanceArray.find((b: any) => b.asset_symbol === "USD");
     const collateral = usdtBalance || inrBalance || usdBalance || balanceArray[0];
 
     if (!collateral) {
@@ -50,11 +39,7 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       return null;
     }
 
-    // Use available_balance field as per Delta Exchange docs
-    const availableBalanceRaw = parseFloat(
-      collateral.available_balance || collateral.balance || "0"
-    );
-
+    const availableBalanceRaw = parseFloat(collateral.available_balance || collateral.balance || "0");
     console.log(`Collateral asset: ${collateral.asset_symbol}, Available: ${availableBalanceRaw}`);
 
     if (availableBalanceRaw <= 0) {
@@ -62,11 +47,9 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       return null;
     }
 
-    // Calculate balance to use for this trade
     const balanceToUse = availableBalanceRaw * (settings.balanceAllocation / 100);
     console.log(`Balance to use: ${balanceToUse} (${settings.balanceAllocation}% of ${availableBalanceRaw})`);
 
-    // Get product info
     const products = await deltaClient.getProducts();
     const product = products.find((p: any) => p.symbol === signal.recommendedAsset);
     if (!product) {
@@ -74,48 +57,39 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       return null;
     }
 
-    // Set leverage for this product
     console.log(`Setting leverage to ${settings.leverage}x`);
     await deltaClient.setProductLeverage(settings.leverage);
 
-    // Calculate quantity with leverage
-    // Available balance * leverage / entry price = position size
-    // Calculate max notional using leverage
-const availableNotional = balanceToUse * settings.leverage;
-const CONTRACT_VALUE = 0.01; // For ETHUSD perpetual
+    // ==== CONTRACT SIZE LOGIC (NO CHANGE) ====
+    const availableNotional = balanceToUse * settings.leverage;
+    const CONTRACT_VALUE = 0.01; // ETHUSD contract value
+    const rawSize = availableNotional / (CONTRACT_VALUE * signal.entryPrice);
+    const quantity = Math.floor(rawSize);
 
-// Convert notional → contract size
-const rawSize = availableNotional / (CONTRACT_VALUE * signal.entryPrice);
-const quantity = Math.floor(rawSize);
+    console.log(
+      `Calculated size (contracts): ${quantity} | Notional: ${availableNotional} | Entry: ${signal.entryPrice}`
+    );
 
-console.log(`Calculated size (contracts): ${quantity} | Notional: ${availableNotional} | Entry: ${signal.entryPrice}`);
-
-if (quantity < 1) {
-  console.error("Not enough balance to open even 1 contract — aborting trade.");
-  return null;
-}
-
-const side = signal.direction === "long" ? "buy" : "sell";
-console.log(`Placing ${side} order: ${quantity} contracts @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`);
-
-      
-      orderResult = await deltaClient.placeMarketOrderWithBracket(
-        quantity,
-        side,
-        signal.stopLoss.toString(),
-        signal.takeProfit.toString()
-      );
-      
-      console.log("Order placed successfully:", JSON.stringify(orderResult, null, 2));
-    } catch (err: any) {
-      console.error("Failed to place Delta order:", err?.message || err);
-      console.error("Delta error body:", err?.response?.data || err);
+    if (quantity < 1) {
+      console.error("Not enough balance to open even 1 contract — aborting trade.");
       return null;
     }
 
+    const side = signal.direction === "long" ? "buy" : "sell";
+    console.log(
+      `Placing ${side} order: ${quantity} contracts @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`
+    );
+
+    const orderResult = await deltaClient.placeMarketOrderWithBracket(
+      quantity,
+      side,
+      signal.stopLoss.toString(),
+      signal.takeProfit.toString()
+    );
+    console.log("Order placed successfully:", JSON.stringify(orderResult, null, 2));
+
     const orderId = orderResult?.result?.id || orderResult?.id || null;
 
-    // Persist trade to DB
     const trade = await storage.createTrade({
       symbol: signal.recommendedAsset,
       tradingMode: settings.tradingMode,
@@ -134,7 +108,6 @@ console.log(`Placing ${side} order: ${quantity} contracts @ ${signal.entryPrice}
       deltaOrderId: orderId,
     });
 
-    // notify
     await sendTradeExecutedEmail({
       symbol: signal.recommendedAsset,
       direction: signal.direction,
@@ -164,7 +137,6 @@ export async function monitorTrades() {
 
       if (state === "closed" || state === "cancelled") {
         const exitPrice = Number(status.average_fill_price || trade.entryPrice.toString());
-        // determine sl/tp/hit
         const entryPrice = Number(trade.entryPrice.toString());
         const stopLoss = Number(trade.stopLoss.toString());
         const takeProfit = Number(trade.takeProfit.toString());
@@ -191,8 +163,8 @@ export async function closeTrade(tradeId: string, exitPrice: number, status: str
 
     const entryPrice = Number(trade.entryPrice.toString());
     const quantity = Number(trade.quantity.toString());
-
     let pnl: number;
+
     if (trade.direction === "long") {
       pnl = (exitPrice - entryPrice) * quantity * trade.leverage;
     } else {
@@ -209,10 +181,8 @@ export async function closeTrade(tradeId: string, exitPrice: number, status: str
       status,
     });
 
-    // update daily performance
     await updateDailyPerformance(trade.symbol, pnl);
 
-    // send email
     await sendTradeClosedEmail({
       symbol: trade.symbol,
       direction: trade.direction,
