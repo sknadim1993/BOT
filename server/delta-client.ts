@@ -1,5 +1,6 @@
 // delta-client.ts
 import axios from "axios";
+import crypto from "crypto";
 import DeltaRestClient from "delta-rest-client";
 
 const BASE_URL = "https://api.india.delta.exchange";
@@ -108,12 +109,46 @@ export async function getWalletBalance() {
 /* ---------------- SET LEVERAGE ---------------- */
 export async function setProductLeverage(leverage: number) {
   await initProduct();
-  const client = await getDeltaClient();
-  const res = await client.apis.Orders.setLeverage({
-    product_id: PRODUCT_ID,
-    leverage: leverage.toString(),
-  });
-  return res;
+  
+  const { DELTA_API_KEY, DELTA_API_SECRET } = process.env;
+  if (!DELTA_API_KEY || !DELTA_API_SECRET) {
+    throw new Error("Missing Delta API credentials");
+  }
+
+  const method = "POST";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const path = `/v2/products/${PRODUCT_ID}/orders/leverage`;
+  const payload = JSON.stringify({ leverage: leverage.toString() });
+  const queryString = "";
+
+  // Generate HMAC-SHA256 signature
+  const signatureData = method + timestamp + path + queryString + payload;
+  const signature = crypto
+    .createHmac("sha256", DELTA_API_SECRET)
+    .update(signatureData)
+    .digest("hex");
+
+  try {
+    const res = await axios.post(
+      `${BASE_URL}${path}`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "api-key": DELTA_API_KEY,
+          "signature": signature,
+          "timestamp": timestamp,
+        },
+      }
+    );
+
+    console.log(`✅ Leverage set to ${leverage}x for product ${PRODUCT_ID}`);
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ Failed to set leverage:", err?.response?.data || err.message);
+    throw err;
+  }
 }
 
 /* ---------------- MARKET ORDER ---------------- */
