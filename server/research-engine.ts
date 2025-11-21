@@ -36,7 +36,7 @@ export async function fetchMultiTimeframeData(): Promise<Record<string, any[]>> 
 
   for (const [tf, cfg] of Object.entries(timeframes)) {
     try {
-      const data = await deltaClient.getOHLCV(cfg.resolution as any, cfg.from, cfg.to);
+      const data = await deltaClient.getOHLCV(SYMBOL, cfg.resolution as any, cfg.from, cfg.to);
       // deltaClient.getOHLCV returns object {symbol, timeframe, data, resolutionUsed?, paramNameUsed?}
       if (data && Array.isArray(data.data)) {
         results[tf] = data.data;
