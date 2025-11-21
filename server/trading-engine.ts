@@ -35,11 +35,7 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
 
     const availableBalance = parseFloat(usdtBalance.balance) * (settings.balanceAllocation / 100);
 
-    // Calculate position size
-    const positionValue = availableBalance * settings.leverage;
-    const quantity = positionValue / signal.entryPrice;
-
-    // Get product ID for the symbol
+    // Get product info
     const products = await deltaClient.getProducts();
     const product = products.find((p: any) => p.symbol === signal.recommendedAsset);
     if (!product) {
@@ -47,15 +43,28 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       return null;
     }
 
-    // Place market order
+    // Set leverage for this product
+    await deltaClient.setProductLeverage(product.id, settings.leverage);
+
+    // Calculate position size (leverage is applied by exchange)
+    const quantity = availableBalance / signal.entryPrice;
+
+    // Place market order with bracket SL/TP
     const side = signal.direction === 'long' ? 'buy' : 'sell';
     let orderId = null;
     
     try {
-      const order = await deltaClient.placeMarketOrder(product.id, quantity, side);
+      const order = await deltaClient.placeMarketOrderWithBracket(
+        product.id,
+        quantity,
+        side,
+        signal.stopLoss.toString(),
+        signal.takeProfit.toString()
+      );
       orderId = order.result?.id || null;
     } catch (error) {
-      console.error('Failed to place Delta order, creating trade record anyway:', error);
+      console.error('Failed to place Delta order:', error);
+      return null;
     }
 
     // Create trade record
@@ -101,41 +110,28 @@ export async function monitorTrades() {
 
   for (const trade of activeTrades) {
     try {
-      // Get current price from orderbook
-      const orderbook = await deltaClient.getOrderbook(trade.symbol);
-      const currentPrice = parseFloat(orderbook.buy[0]?.price || '0');
-
-      if (currentPrice === 0) continue;
-
-      const entryPrice = parseFloat(trade.entryPrice.toString());
-      const stopLoss = parseFloat(trade.stopLoss.toString());
-      const takeProfit = parseFloat(trade.takeProfit.toString());
-
-      let shouldClose = false;
-      let status = trade.status;
-
-      // Check if stop loss or take profit hit
-      if (trade.direction === 'long') {
-        if (currentPrice <= stopLoss) {
-          shouldClose = true;
-          status = 'sl_hit';
-        } else if (currentPrice >= takeProfit) {
-          shouldClose = true;
-          status = 'tp_hit';
+      // Check order status on Delta Exchange
+      if (trade.deltaOrderId) {
+        const orderStatus = await deltaClient.getOrderStatus(trade.deltaOrderId);
+        
+        // If bracket orders hit, they'll show in order status
+        if (orderStatus.state === 'closed' || orderStatus.state === 'cancelled') {
+          const exitPrice = parseFloat(orderStatus.average_fill_price || trade.entryPrice.toString());
+          
+          // Determine if SL or TP was hit based on price
+          const entryPrice = parseFloat(trade.entryPrice.toString());
+          const stopLoss = parseFloat(trade.stopLoss.toString());
+          const takeProfit = parseFloat(trade.takeProfit.toString());
+          
+          let status = 'closed';
+          if (trade.direction === 'long') {
+            status = exitPrice <= stopLoss ? 'sl_hit' : exitPrice >= takeProfit ? 'tp_hit' : 'closed';
+          } else {
+            status = exitPrice >= stopLoss ? 'sl_hit' : exitPrice <= takeProfit ? 'tp_hit' : 'closed';
+          }
+          
+          await closeTrade(trade.id, exitPrice, status);
         }
-      } else {
-        // Short position
-        if (currentPrice >= stopLoss) {
-          shouldClose = true;
-          status = 'sl_hit';
-        } else if (currentPrice <= takeProfit) {
-          shouldClose = true;
-          status = 'tp_hit';
-        }
-      }
-
-      if (shouldClose) {
-        await closeTrade(trade.id, currentPrice, status);
       }
     } catch (error) {
       console.error(`Error monitoring trade ${trade.id}:`, error);
@@ -151,15 +147,15 @@ export async function closeTrade(tradeId: string, exitPrice: number, status: str
     const entryPrice = parseFloat(trade.entryPrice.toString());
     const quantity = parseFloat(trade.quantity.toString());
     
-    // Calculate PnL
+    // Calculate PnL (leverage is already factored in by exchange)
     let pnl: number;
     if (trade.direction === 'long') {
-      pnl = (exitPrice - entryPrice) * quantity;
+      pnl = (exitPrice - entryPrice) * quantity * trade.leverage;
     } else {
-      pnl = (entryPrice - exitPrice) * quantity;
+      pnl = (entryPrice - exitPrice) * quantity * trade.leverage;
     }
 
-    const pnlPercentage = (pnl / (entryPrice * quantity)) * 100 * trade.leverage;
+    const pnlPercentage = (pnl / (entryPrice * quantity)) * 100;
 
     // Update trade
     await storage.updateTrade(tradeId, {
