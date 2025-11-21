@@ -23,5 +23,9 @@ export async function serveStatic(app: Express, _server: Server) {
 }
 
 (async () => {
+  // Import and start scheduler
+  const { startScheduler } = await import("./scheduler");
+  startScheduler();
+  
   await runApp(serveStatic);
 })();
