@@ -60,7 +60,7 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
     console.log(`Setting leverage to ${settings.leverage}x`);
     await deltaClient.setProductLeverage(settings.leverage);
 
-    // ==== CONTRACT SIZE LOGIC (NO CHANGE) ====
+    // ==== CONTRACT SIZE LOGIC ====
     const availableNotional = balanceToUse * settings.leverage;
     const CONTRACT_VALUE = 0.01; // ETHUSD contract value
     const rawSize = availableNotional / (CONTRACT_VALUE * signal.entryPrice);
@@ -75,17 +75,51 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       return null;
     }
 
+    // ==== VALIDATION: Ensure entry price makes sense ====
     const side = signal.direction === "long" ? "buy" : "sell";
+    
+    if (signal.direction === "long") {
+      if (signal.takeProfit <= signal.entryPrice) {
+        console.error(
+          `❌ INVALID LONG TRADE: Entry (${signal.entryPrice}) must be < Take Profit (${signal.takeProfit})`
+        );
+        return null;
+      }
+      if (signal.stopLoss >= signal.entryPrice) {
+        console.error(
+          `❌ INVALID LONG TRADE: Stop Loss (${signal.stopLoss}) must be < Entry (${signal.entryPrice})`
+        );
+        return null;
+      }
+    } else {
+      // SHORT
+      if (signal.takeProfit >= signal.entryPrice) {
+        console.error(
+          `❌ INVALID SHORT TRADE: Entry (${signal.entryPrice}) must be > Take Profit (${signal.takeProfit})`
+        );
+        return null;
+      }
+      if (signal.stopLoss <= signal.entryPrice) {
+        console.error(
+          `❌ INVALID SHORT TRADE: Stop Loss (${signal.stopLoss}) must be > Entry (${signal.entryPrice})`
+        );
+        return null;
+      }
+    }
+
     console.log(
-      `Placing ${side} order: ${quantity} contracts @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`
+      `Placing LIMIT ${side} order: ${quantity} contracts @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`
     );
 
-    const orderResult = await deltaClient.placeMarketOrderWithBracket(
+    // ==== PLACE LIMIT ORDER WITH BRACKET ====
+    const orderResult = await deltaClient.placeLimitOrderWithBracket(
       quantity,
       side,
+      signal.entryPrice.toString(),
       signal.stopLoss.toString(),
       signal.takeProfit.toString()
     );
+
     console.log("Order placed successfully:", JSON.stringify(orderResult, null, 2));
 
     const orderId = orderResult?.result?.id || orderResult?.id || null;
