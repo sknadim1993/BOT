@@ -115,11 +115,69 @@ export async function getCurrentPrice(): Promise<number> {
   }
 }
 
-/* ---------------- POSITIONS ---------------- */
+/* ---------------- POSITIONS (OLD METHOD - FALLBACK) ---------------- */
 export async function getPositions() {
   const client = await getDeltaClient();
   const res = await client.apis.Positions.getPositions();
   return res?.data?.result || res?.result || res;
+}
+
+/* ---------------- GET OPEN POSITIONS (NEW - AUTHENTICATED) ---------------- */
+export async function getOpenPositions() {
+  await initProduct();
+  
+  const { DELTA_API_KEY, DELTA_API_SECRET } = process.env;
+  if (!DELTA_API_KEY || !DELTA_API_SECRET) {
+    throw new Error("Missing Delta API credentials");
+  }
+
+  const method = "GET";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const path = "/v2/positions";
+  const queryString = `product_id=${PRODUCT_ID}`;
+  const payload = "";
+
+  // Generate HMAC-SHA256 signature
+  const signatureData = method + timestamp + path + queryString + payload;
+  const signature = crypto
+    .createHmac("sha256", DELTA_API_SECRET)
+    .update(signatureData)
+    .digest("hex");
+
+  try {
+    const res = await axios.get(
+      `${BASE_URL}${path}`,
+      {
+        params: {
+          product_id: PRODUCT_ID,
+        },
+        headers: {
+          "Accept": "application/json",
+          "api-key": DELTA_API_KEY,
+          "signature": signature,
+          "timestamp": timestamp,
+          "User-Agent": "trading-bot",
+        },
+      }
+    );
+
+    const positions = res?.data?.result || res?.data || [];
+    
+    // Filter only positions with non-zero size
+    const openPositions = positions.filter((pos: any) => {
+      const size = Math.abs(parseFloat(pos.size || "0"));
+      return size > 0;
+    });
+
+    if (openPositions.length > 0) {
+      console.log(`📊 Found ${openPositions.length} open position(s) on Delta Exchange`);
+    }
+    
+    return openPositions;
+  } catch (err: any) {
+    console.error("❌ Failed to get open positions:", err?.response?.data || err.message);
+    return [];
+  }
 }
 
 /* ---------------- WALLET ---------------- */
@@ -351,11 +409,12 @@ export const deltaClient = {
   getOrderbook,
   getCurrentPrice,
   getPositions,
+  getOpenPositions, // ✅ NEW - Use this for accurate position checking
   getWalletBalance,
   setProductLeverage,
   placeMarketOrder,
-  placeLimitOrderWithBracket, // NEW: Use this for trading signals
-  placeMarketOrderWithBracket, // DEPRECATED: Don't use
+  placeLimitOrderWithBracket,
+  placeMarketOrderWithBracket,
   cancelOrder,
   getOrderStatus,
   testConnection,
