@@ -1,5 +1,6 @@
 import Groq from "groq-sdk";
-import { DeltaRestClient } from "delta-rest-client";
+import pkg from "delta-rest-client";
+const { DeltaRestClient } = pkg;
 import { z } from "zod";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
