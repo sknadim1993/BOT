@@ -41,6 +41,7 @@ interface MarketData {
 }
 
 export type Direction = 'long' | 'short' | 'none';
+export type ExecutionStrategy = 'market' | 'limit';
 
 export interface TradingRecommendation {
   recommendedAsset: string;
@@ -53,6 +54,8 @@ export interface TradingRecommendation {
   weakestAssets: string[];
   patternExplanation: string;
   multiTimeframeReasoning: string;
+  executionStrategy: ExecutionStrategy;
+  reasonForStrategy: string;
 }
 
 const TIMEFRAME_MAP: Record<string, string> = {
@@ -78,49 +81,58 @@ function buildPrompt(marketData: MarketData[], tradingMode: string, currentPrice
     })
     .join('\n---\n');
 
-  // Calculate exact boundaries
-  const maxLongEntry = (currentPrice * 1.005).toFixed(2);
-  const minLongEntry = currentPrice.toFixed(2);
-  const maxShortEntry = currentPrice.toFixed(2);
-  const minShortEntry = (currentPrice * 0.995).toFixed(2);
+  const systemPrompt = `You are an expert cryptocurrency trading AI with FULL autonomous decision-making authority.
 
-  const systemPrompt = `You are a crypto trading signal generator with MANDATORY numerical constraints.
+COMPREHENSIVE RESPONSIBILITIES:
+1. Analyze market data (price action, orderbook pressure, volume, volatility, patterns)
+2. Decide trade direction: long, short, or none
+3. Determine optimal entry price based on technical analysis
+4. Set appropriate stop loss and take profit levels
+5. Choose execution strategy: market or limit
 
-ABSOLUTE RULES (violation = system rejection):
-1. REFERENCE POINT: Current price $${currentPrice} is the ONLY anchor. NEVER use historical swing highs/lows.
-2. PERCENTAGE BOUNDS: Entry MUST be within 0.5% of current price.
-3. CALCULATION PROCESS:
-   - Current Price: $${currentPrice}
-   - For LONG: Entry between $${minLongEntry} and $${maxLongEntry}
-   - For SHORT: Entry between $${minShortEntry} and $${maxShortEntry}
-   
-EXECUTION ORDER:
-Step 1: State current price explicitly: $${currentPrice}
-Step 2: Calculate boundaries based on current price ONLY
-Step 3: Propose entry within boundaries
-Step 4: VERIFY: abs((entry - ${currentPrice}) / ${currentPrice} × 100) ≤ 0.5
-Step 5: Return structured JSON
+EXECUTION STRATEGY SELECTION:
+- **MARKET ORDER** (execute immediately at current price):
+  * Use when: Strong momentum breakout/breakdown is happening NOW
+  * Use when: Time-sensitive signal that requires immediate action
+  * Use when: Price is already at optimal entry level
+  * Entry price: Will be current market price ($${currentPrice})
+  
+- **LIMIT ORDER** (wait for better entry price):
+  * Use when: Current price needs minor pullback/retracement (0.3% - 2%)
+  * Use when: Better risk/reward available by waiting
+  * Use when: Support/resistance level nearby offers better entry
+  * Entry price: Can be 0.3% - 2% away from current price
+  * Limit orders will wait up to 15 minutes for price to reach target
 
-EXAMPLE (DO THIS):
-Current: $${currentPrice}
-Selected LONG Entry: $${(currentPrice * 1.002).toFixed(2)} ✓ (0.2% from current)
+RISK MANAGEMENT RULES:
+- Minimum 1:2 risk/reward ratio (preferably 1:3 for scalping)
+- Stop loss: 0.5% - 1% from entry (tight stops for scalping)
+- Only suggest trades with confidence ≥ 70
+- For limit orders: ensure entry makes logical sense (LONG entry < current, SHORT entry > current)
 
-FORBIDDEN (NEVER DO THIS):
-Using swing highs/previous resistance levels that are >0.5% away from current price ✗
+IMPORTANT CONSTRAINTS:
+- For MARKET orders: Entry will be exactly current price ($${currentPrice})
+- For LIMIT orders: Entry must be within 0.3% - 2% of current price
+- LONG limit orders: Entry MUST BE BELOW current price (buy the dip)
+- SHORT limit orders: Entry MUST BE ABOVE current price (sell the rally)
 
-You MUST respond with valid JSON matching this exact structure:
+Return ONLY valid JSON with this EXACT structure:
 {
-  "recommendedAsset": "string",
+  "recommendedAsset": "ETHUSD",
   "direction": "long|short|none",
   "entryPrice": number,
   "stopLoss": number,
   "takeProfit": number,
-  "confidence": number (1-100),
-  "strongestAssets": ["string"],
-  "weakestAssets": ["string"],
-  "patternExplanation": "string",
-  "multiTimeframeReasoning": "string"
-}`;
+  "confidence": number (70-95 for trades, <70 for none),
+  "executionStrategy": "market|limit",
+  "reasonForStrategy": "Detailed explanation of why this execution method",
+  "strongestAssets": ["array of strings"],
+  "weakestAssets": ["array of strings"],
+  "patternExplanation": "Technical analysis explanation",
+  "multiTimeframeReasoning": "Multi-timeframe confluence analysis"
+}
+
+CRITICAL: Do NOT suggest trades with confidence < 70. When uncertain, return direction = "none".`;
 
   const userPrompt = `CURRENT MARKET PRICE: $${currentPrice}
 
@@ -129,133 +141,205 @@ ${marketSections}
 
 TRADING MODE: ${tradingMode.toUpperCase()} (Primary Timeframe: ${primaryTimeframe})
 
-Generate a trading signal where entry is within 0.5% of $${currentPrice}.
+ANALYSIS REQUIREMENTS:
+1. Assess trend direction and momentum strength
+2. Evaluate orderbook imbalance (bid vs ask pressure)
+3. Identify key support/resistance levels
+4. Analyze volume profile and volatility
+5. Determine if immediate execution is required or if waiting for better entry is optimal
 
-For LONG trades: entry between $${minLongEntry} and $${maxLongEntry}
-For SHORT trades: entry between $${minShortEntry} and $${maxShortEntry}
+Make your COMPLETE autonomous trading decision including:
+- Should we trade? (only if confidence ≥ 70)
+- Which direction provides best probability?
+- What's the ideal entry price?
+- Should we execute NOW (market) or WAIT (limit)?
+- Where should protective stop loss be placed?
+- What's the realistic take profit target (minimum 1:2 R/R)?
 
-If no valid setup exists within these bounds, return direction = "none" with confidence < 60.`;
+DECISION FRAMEWORK:
+- If strong breakout/breakdown happening NOW → market order at $${currentPrice}
+- If price needs 0.3%-2% pullback for better R/R → limit order
+- Current price: $${currentPrice}
+
+Respond with your complete trading decision in JSON format.`;
 
   return { systemPrompt, userPrompt, primaryTimeframe };
 }
 
-function enforceRiskRewardAndSanitize(analysis: any, currentPrice: number, lastCandle: OHLCV | null): TradingRecommendation {
+function enforceRiskRewardAndSanitize(
+  analysis: any,
+  currentPrice: number,
+  lastCandle: OHLCV | null
+): TradingRecommendation {
   console.log('\n=== SANITIZATION LAYER ===');
-  console.log('Groq raw response:', JSON.stringify(analysis, null, 2));
+  console.log('AI raw response:', JSON.stringify(analysis, null, 2));
   console.log('Current market price:', currentPrice);
-  
+
   // Defensive default
   const defaultNoTrade: TradingRecommendation = {
-    recommendedAsset: analysis?.recommendedAsset || 'UNKNOWN',
+    recommendedAsset: analysis?.recommendedAsset || 'ETHUSD',
     direction: 'none',
     entryPrice: currentPrice,
     stopLoss: currentPrice,
     takeProfit: currentPrice,
-    confidence: Math.max(1, Math.min(59, analysis?.confidence || 50)),
+    confidence: Math.max(1, Math.min(69, analysis?.confidence || 50)),
     strongestAssets: analysis?.strongestAssets || [],
     weakestAssets: analysis?.weakestAssets || [],
     patternExplanation: analysis?.patternExplanation || 'No trade — insufficient confluence',
     multiTimeframeReasoning: analysis?.multiTimeframeReasoning || '',
+    executionStrategy: 'market',
+    reasonForStrategy: 'No trade signal',
   };
 
   if (!analysis || !analysis.direction || analysis.direction === 'none') {
-    console.log('Direction is none, returning no-trade');
+    console.log('✋ Direction is none, returning no-trade');
+    return defaultNoTrade;
+  }
+
+  // Validate confidence threshold
+  const confidence = Math.round(Number(analysis.confidence || 50));
+  if (confidence < 70) {
+    console.log(`✋ Confidence too low (${confidence} < 70), rejecting trade`);
     return defaultNoTrade;
   }
 
   const dir: Direction = analysis.direction === 'short' ? 'short' : 'long';
-  console.log('Direction:', dir);
+  const strategy: ExecutionStrategy = analysis.executionStrategy === 'limit' ? 'limit' : 'market';
+  
+  console.log(`\n🤖 AI Decision:`);
+  console.log(`   Direction: ${dir.toUpperCase()}`);
+  console.log(`   Strategy: ${strategy.toUpperCase()}`);
+  console.log(`   Confidence: ${confidence}%`);
 
-  // CRITICAL: Force entry to be very close to current price
-  // Maximum 0.3% deviation allowed
-  const MAX_ENTRY_DEVIATION = 0.003; // 0.3%
-  
-  let entry = Number(analysis.entryPrice || currentPrice);
-  console.log('Groq suggested entry:', entry);
-  
-  // Check if Groq's entry is too far from current price
-  const entryDeviation = Math.abs(entry - currentPrice) / currentPrice;
-  console.log(`Entry deviation: ${(entryDeviation * 100).toFixed(3)}%`);
-  
-  if (entryDeviation > MAX_ENTRY_DEVIATION) {
-    console.warn(`⚠️ OVERRIDE: Groq entry ${entry} is ${(entryDeviation * 100).toFixed(2)}% from current ${currentPrice}`);
-    
-    // FORCE override to safe entry near current price
-    if (dir === 'long') {
-      entry = currentPrice * 1.0015; // 0.15% above current
-      console.log(`✓ Overridden to LONG entry: ${entry.toFixed(2)} (0.15% above current)`);
-    } else {
-      entry = currentPrice * 0.9985; // 0.15% below current
-      console.log(`✓ Overridden to SHORT entry: ${entry.toFixed(2)} (0.15% below current)`);
-    }
-  } else {
-    console.log(`✓ Entry ${entry} is within acceptable range`);
-  }
-  
-  // Calculate stop loss based on entry (not from Groq)
-  // For scalping: tight stops at 0.5% from entry
+  let entry: number;
   let stop: number;
-  if (dir === 'long') {
-    stop = entry * 0.995; // 0.5% below entry
-  } else {
-    stop = entry * 1.005; // 0.5% above entry
-  }
-  console.log('Calculated stop loss:', stop.toFixed(2));
-
-  // Compute TP = entry + 2*(entry - SL) for long, inverse for short
   let tp: number;
-  if (dir === 'long') {
-    const rr = entry - stop; // risk
-    tp = entry + Math.abs(rr) * 2;
-  } else {
-    const rr = stop - entry; // risk for short (positive)
-    tp = entry - Math.abs(rr) * 2;
+
+  // ===== MARKET ORDER STRATEGY =====
+  if (strategy === 'market') {
+    console.log('\n💨 MARKET ORDER - Execute immediately');
+    
+    entry = currentPrice;
+    console.log(`✓ Entry = Current Price: $${entry.toFixed(2)}`);
+
+    // Tight stops for scalping
+    if (dir === 'long') {
+      stop = entry * 0.995; // 0.5% below entry
+      tp = entry + ((entry - stop) * 2); // 1:2 R/R
+    } else {
+      stop = entry * 1.005; // 0.5% above entry
+      tp = entry - ((stop - entry) * 2); // 1:2 R/R
+    }
+
+    console.log(`   Stop Loss: $${stop.toFixed(2)}`);
+    console.log(`   Take Profit: $${tp.toFixed(2)}`);
+    console.log(`   Risk/Reward: 1:2.0`);
   }
-  console.log('Calculated take profit:', tp.toFixed(2));
+  // ===== LIMIT ORDER STRATEGY =====
+  else {
+    console.log('\n⏳ LIMIT ORDER - Wait for better entry');
+    
+    const aiSuggestedEntry = Number(analysis.entryPrice || currentPrice);
+    console.log(`   AI suggested entry: $${aiSuggestedEntry.toFixed(2)}`);
+    
+    // Validate AI's entry makes sense
+    const entryDeviation = Math.abs(aiSuggestedEntry - currentPrice) / currentPrice;
+    const MIN_DEVIATION = 0.003; // 0.3% minimum
+    const MAX_DEVIATION = 0.02;  // 2% maximum
+    
+    console.log(`   Deviation from current: ${(entryDeviation * 100).toFixed(2)}%`);
 
-  // Confidence clamp
-  let confidence = Math.round(Number(analysis.confidence || 50));
-  if (isNaN(confidence) || confidence < 1) confidence = 1;
-  if (confidence > 95) confidence = 95;
+    // Check if deviation is acceptable
+    if (entryDeviation < MIN_DEVIATION) {
+      console.log(`⚠️ Entry too close to current (${(entryDeviation * 100).toFixed(2)}% < 0.3%), using MARKET order instead`);
+      entry = currentPrice;
+    } else if (entryDeviation > MAX_DEVIATION) {
+      console.log(`⚠️ Entry too far from current (${(entryDeviation * 100).toFixed(2)}% > 2%), capping at 1.5%`);
+      if (dir === 'long') {
+        entry = currentPrice * 0.985; // 1.5% below current
+      } else {
+        entry = currentPrice * 1.015; // 1.5% above current
+      }
+    } else {
+      // Validate direction logic
+      if (dir === 'long' && aiSuggestedEntry >= currentPrice) {
+        console.log(`⚠️ LONG limit must be BELOW current, adjusting: ${aiSuggestedEntry} -> ${(currentPrice * 0.995).toFixed(2)}`);
+        entry = currentPrice * 0.995; // 0.5% below
+      } else if (dir === 'short' && aiSuggestedEntry <= currentPrice) {
+        console.log(`⚠️ SHORT limit must be ABOVE current, adjusting: ${aiSuggestedEntry} -> ${(currentPrice * 1.005).toFixed(2)}`);
+        entry = currentPrice * 1.005; // 0.5% above
+      } else {
+        entry = aiSuggestedEntry;
+        console.log(`✓ Using AI entry: $${entry.toFixed(2)}`);
+      }
+    }
 
-  // If the adjusted entry/SL/TP are nonsensical (e.g., equal), return no-trade
-  if (!isFinite(entry) || !isFinite(stop) || !isFinite(tp) || Math.abs(entry - stop) < 0.0001) {
+    // Calculate SL/TP based on entry
+    if (dir === 'long') {
+      stop = entry * 0.995; // 0.5% below entry
+      tp = entry + ((entry - stop) * 2.5); // 1:2.5 R/R (better for limit orders)
+    } else {
+      stop = entry * 1.005; // 0.5% above entry
+      tp = entry - ((stop - entry) * 2.5); // 1:2.5 R/R
+    }
+
+    const riskReward = Math.abs(tp - entry) / Math.abs(entry - stop);
+    console.log(`   Final Entry: $${entry.toFixed(2)}`);
+    console.log(`   Stop Loss: $${stop.toFixed(2)}`);
+    console.log(`   Take Profit: $${tp.toFixed(2)}`);
+    console.log(`   Risk/Reward: 1:${riskReward.toFixed(2)}`);
+  }
+
+  // Validate risk/reward ratio
+  const risk = Math.abs(entry - stop);
+  const reward = Math.abs(tp - entry);
+  const riskRewardRatio = reward / risk;
+
+  if (riskRewardRatio < 1.5) {
+    console.log(`❌ Risk/Reward too low (${riskRewardRatio.toFixed(2)} < 1.5), rejecting trade`);
+    return defaultNoTrade;
+  }
+
+  // Final validation
+  if (!isFinite(entry) || !isFinite(stop) || !isFinite(tp)) {
     console.error('❌ Invalid price calculations, returning no-trade');
     return defaultNoTrade;
   }
 
   const result: TradingRecommendation = {
-    recommendedAsset: analysis.recommendedAsset || marketReferenceAssetFromAnalysis(analysis),
+    recommendedAsset: analysis.recommendedAsset || 'ETHUSD',
     direction: dir,
-    entryPrice: Number(Number(entry).toFixed(2)),
-    stopLoss: Number(Number(stop).toFixed(2)),
-    takeProfit: Number(Number(tp).toFixed(2)),
+    entryPrice: Number(entry.toFixed(2)),
+    stopLoss: Number(stop.toFixed(2)),
+    takeProfit: Number(tp.toFixed(2)),
     confidence,
     strongestAssets: analysis.strongestAssets || [],
     weakestAssets: analysis.weakestAssets || [],
     patternExplanation: analysis.patternExplanation || '',
     multiTimeframeReasoning: analysis.multiTimeframeReasoning || '',
+    executionStrategy: strategy,
+    reasonForStrategy: analysis.reasonForStrategy || `${strategy === 'market' ? 'Immediate execution' : 'Wait for better entry'}`,
   };
 
-  console.log('Final sanitized result:', {
-    direction: result.direction,
+  console.log('\n✅ FINAL TRADE SIGNAL:', {
+    direction: result.direction.toUpperCase(),
+    strategy: result.executionStrategy.toUpperCase(),
     entry: result.entryPrice,
     sl: result.stopLoss,
-    tp: result.takeProfit
+    tp: result.takeProfit,
+    confidence: result.confidence,
+    riskReward: `1:${riskRewardRatio.toFixed(2)}`,
   });
 
   return result;
 }
 
-function marketReferenceAssetFromAnalysis(analysis: any): string {
-  if (analysis?.recommendedAsset) return analysis.recommendedAsset;
-  if (analysis?.strongestAssets && analysis.strongestAssets.length) return analysis.strongestAssets[0];
-  return 'UNKNOWN';
-}
+export async function analyzeMarkets(
+  marketData: MarketData[],
+  tradingMode: string
+): Promise<TradingRecommendation> {
+  console.log('\n🔬 ===== GROQ AI ANALYSIS START =====');
 
-export async function analyzeMarkets(marketData: MarketData[], tradingMode: string): Promise<TradingRecommendation> {
-  console.log('\n=== GROQ ANALYSIS START ===');
-  
   // Get current price from latest candle
   const primaryTimeframe = TIMEFRAME_MAP[tradingMode] || '15m';
   const primaryMarket = marketData.find((m) => m.timeframe === primaryTimeframe) || marketData[0];
@@ -266,17 +350,14 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
     throw new Error('Unable to determine current market price from provided market data.');
   }
 
-  console.log('Current market price:', currentPrice);
-  console.log('Max allowed entry deviation: 0.5%');
-  console.log('LONG entry range:', `${currentPrice.toFixed(2)} - ${(currentPrice * 1.005).toFixed(2)}`);
-  console.log('SHORT entry range:', `${(currentPrice * 0.995).toFixed(2)} - ${currentPrice.toFixed(2)}`);
+  console.log(`📊 Current market price: $${currentPrice.toFixed(2)}`);
+  console.log(`⚙️ Trading mode: ${tradingMode}`);
 
-  const { systemPrompt, userPrompt, primaryTimeframe: ptf } = buildPrompt(marketData, tradingMode, currentPrice);
+  const { systemPrompt, userPrompt } = buildPrompt(marketData, tradingMode, currentPrice);
 
   try {
     const client = getGroqClient();
 
-    // Use llama-3.3-70b-versatile which supports JSON mode
     const completion = await client.chat.completions.create({
       messages: [
         {
@@ -289,72 +370,38 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
         },
       ],
       model: 'llama-3.3-70b-versatile',
-      temperature: 0.1, // Very low temperature for deterministic output
-      max_tokens: 1600,
-      response_format: { type: 'json_object' }
+      temperature: 0.2,
+      max_tokens: 2000,
+      response_format: { type: 'json_object' },
     });
 
     const response = completion.choices[0]?.message?.content;
     if (!response) {
-      throw new Error('No response from Groq');
+      throw new Error('No response from Groq AI');
     }
 
-    console.log('Groq raw response received');
+    console.log('✓ AI response received');
 
     // Parse JSON response
     let analysis: any;
-    if (typeof response === 'string') {
-      try {
-        analysis = JSON.parse(response);
-      } catch (err) {
-        throw new Error('Groq returned invalid JSON');
-      }
-    } else {
-      analysis = response;
+    try {
+      analysis = JSON.parse(response);
+    } catch (err) {
+      console.error('❌ Failed to parse AI response as JSON');
+      throw new Error('AI returned invalid JSON');
     }
 
-    // CRITICAL: Apply sanitization (this returns a NEW object)
+    // Apply sanitization and validation
     const sanitized = enforceRiskRewardAndSanitize(analysis, currentPrice, lastCandle);
 
-    console.log('\n=== FINAL VALIDATION ===');
-    console.log('Sanitized direction:', sanitized.direction);
-    console.log('Sanitized entry:', sanitized.entryPrice);
-    
-    // Final safety check: ensure entry is within acceptable bounds
-    if (sanitized.direction !== 'none') {
-      const finalDeviation = Math.abs(sanitized.entryPrice - currentPrice) / currentPrice;
-      console.log(`Final entry deviation: ${(finalDeviation * 100).toFixed(3)}%`);
-      
-      if (finalDeviation > 0.01) {
-        console.error(`❌ SAFETY BLOCK: Final entry ${sanitized.entryPrice} is ${(finalDeviation * 100).toFixed(2)}% from current ${currentPrice}`);
-        
-        // If still outside 1% after sanitization, return no-trade
-        return {
-          recommendedAsset: sanitized.recommendedAsset,
-          direction: 'none',
-          entryPrice: currentPrice,
-          stopLoss: currentPrice,
-          takeProfit: currentPrice,
-          confidence: Math.max(1, Math.min(59, sanitized.confidence)),
-          strongestAssets: sanitized.strongestAssets,
-          weakestAssets: sanitized.weakestAssets,
-          patternExplanation: 'No safe entry within acceptable deviation from market price',
-          multiTimeframeReasoning: sanitized.multiTimeframeReasoning,
-        };
-      }
-      
-      console.log('✓ Final validation passed');
-    }
-
-    console.log('=== GROQ ANALYSIS COMPLETE ===\n');
+    console.log('🔬 ===== GROQ AI ANALYSIS COMPLETE =====\n');
     return sanitized;
-    
   } catch (error: any) {
-    console.error('Groq analysis error:', error?.message || error);
-    
-    // Return a safe no-trade recommendation rather than crash the system
+    console.error('❌ AI analysis error:', error?.message || error);
+
+    // Return safe no-trade recommendation
     return {
-      recommendedAsset: marketData[0]?.symbol || 'UNKNOWN',
+      recommendedAsset: marketData[0]?.symbol || 'ETHUSD',
       direction: 'none',
       entryPrice: currentPrice,
       stopLoss: currentPrice,
@@ -362,8 +409,10 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
       confidence: 30,
       strongestAssets: [],
       weakestAssets: [],
-      patternExplanation: `Groq error: ${error?.message || 'unknown error'}`,
+      patternExplanation: `AI error: ${error?.message || 'unknown error'}`,
       multiTimeframeReasoning: '',
+      executionStrategy: 'market',
+      reasonForStrategy: 'Error occurred',
     };
   }
 }
