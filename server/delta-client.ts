@@ -90,6 +90,31 @@ export async function getOrderbook() {
   return res?.data?.result || res?.result || res;
 }
 
+/* ---------------- GET CURRENT MARKET PRICE ---------------- */
+export async function getCurrentPrice(): Promise<number> {
+  try {
+    const url = `${BASE_URL}/v2/tickers/${SYMBOL}`;
+    const res = await axios.get(url);
+    const ticker = res?.data?.result;
+    
+    if (!ticker) {
+      throw new Error("No ticker data available");
+    }
+    
+    // Use mark_price as it's more reliable for perpetual futures
+    const price = parseFloat(ticker.mark_price || ticker.close || ticker.last_price);
+    
+    if (!price || isNaN(price)) {
+      throw new Error("Invalid price data from ticker");
+    }
+    
+    return price;
+  } catch (err: any) {
+    console.error("❌ Failed to get current price:", err?.response?.data || err.message);
+    throw err;
+  }
+}
+
 /* ---------------- POSITIONS ---------------- */
 export async function getPositions() {
   const client = await getDeltaClient();
@@ -265,9 +290,45 @@ export async function cancelOrder(orderId: string) {
 }
 
 export async function getOrderStatus(orderId: string) {
-  const client = await getDeltaClient();
-  const res = await client.apis.Orders.getOrder({ id: orderId });
-  return res?.data?.result || res?.result || res;
+  await initProduct();
+  
+  const { DELTA_API_KEY, DELTA_API_SECRET } = process.env;
+  if (!DELTA_API_KEY || !DELTA_API_SECRET) {
+    throw new Error("Missing Delta API credentials");
+  }
+
+  const method = "GET";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const path = `/v2/orders/${orderId}`;
+  const queryString = "";
+  const payload = "";
+
+  // Generate HMAC-SHA256 signature
+  const signatureData = method + timestamp + path + queryString + payload;
+  const signature = crypto
+    .createHmac("sha256", DELTA_API_SECRET)
+    .update(signatureData)
+    .digest("hex");
+
+  try {
+    const res = await axios.get(
+      `${BASE_URL}${path}`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "api-key": DELTA_API_KEY,
+          "signature": signature,
+          "timestamp": timestamp,
+          "User-Agent": "trading-bot",
+        },
+      }
+    );
+
+    return res?.data?.result || res?.data;
+  } catch (err: any) {
+    console.error("❌ Failed to get order status:", err?.response?.data || err.message);
+    throw err;
+  }
 }
 
 /* ---------------- CONNECTION TEST ---------------- */
@@ -288,6 +349,7 @@ export const deltaClient = {
   getOHLCV,
   getProducts,
   getOrderbook,
+  getCurrentPrice,
   getPositions,
   getWalletBalance,
   setProductLeverage,
