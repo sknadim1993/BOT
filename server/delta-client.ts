@@ -151,7 +151,72 @@ export async function setProductLeverage(leverage: number) {
   }
 }
 
-/* ---------------- MARKET ORDER ---------------- */
+/* ---------------- LIMIT ORDER WITH BRACKET (SL/TP) ---------------- */
+export async function placeLimitOrderWithBracket(
+  size: number,
+  side: "buy" | "sell",
+  limitPrice: string,
+  stopLoss: string,
+  takeProfit: string
+) {
+  await initProduct();
+  
+  const { DELTA_API_KEY, DELTA_API_SECRET } = process.env;
+  if (!DELTA_API_KEY || !DELTA_API_SECRET) {
+    throw new Error("Missing Delta API credentials");
+  }
+
+  const method = "POST";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const path = "/v2/orders";
+  const queryString = "";
+
+  // Build the order payload with bracket parameters
+  const orderPayload = {
+    product_id: PRODUCT_ID,
+    size: Math.floor(size),
+    side: side,
+    order_type: "limit_order",
+    limit_price: limitPrice,
+    time_in_force: "gtc", // Good till cancelled
+    bracket_stop_loss_price: stopLoss,
+    bracket_take_profit_price: takeProfit,
+  };
+
+  const payload = JSON.stringify(orderPayload);
+
+  // Generate HMAC-SHA256 signature
+  const signatureData = method + timestamp + path + queryString + payload;
+  const signature = crypto
+    .createHmac("sha256", DELTA_API_SECRET)
+    .update(signatureData)
+    .digest("hex");
+
+  try {
+    const res = await axios.post(
+      `${BASE_URL}${path}`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "api-key": DELTA_API_KEY,
+          "signature": signature,
+          "timestamp": timestamp,
+          "User-Agent": "trading-bot",
+        },
+      }
+    );
+
+    console.log(`✅ Limit order placed: ${side} ${size} contracts @ ${limitPrice} with SL: ${stopLoss}, TP: ${takeProfit}`);
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ Failed to place limit order with bracket:", err?.response?.data || err.message);
+    throw err;
+  }
+}
+
+/* ---------------- MARKET ORDER (Keep for reference, but DON'T USE for trading signals) ---------------- */
 export async function placeMarketOrder(size: number, side: "buy" | "sell") {
   await initProduct();
   const client = await getDeltaClient();
@@ -159,7 +224,7 @@ export async function placeMarketOrder(size: number, side: "buy" | "sell") {
   const res = await client.apis.Orders.placeOrder({
     order: {
       product_id: PRODUCT_ID,
-      size: Math.floor(size), // Convert to integer (number of contracts)
+      size: Math.floor(size),
       side,
       order_type: "market_order",
       time_in_force: "ioc",
@@ -169,19 +234,20 @@ export async function placeMarketOrder(size: number, side: "buy" | "sell") {
   return res;
 }
 
-/* ---------------- MARKET ORDER + SL / TP ---------------- */
+/* ---------------- DEPRECATED: MARKET ORDER + SL / TP (DO NOT USE) ---------------- */
 export async function placeMarketOrderWithBracket(
   size: number,
   side: "buy" | "sell",
   stopLoss: string,
   takeProfit: string
 ) {
+  console.warn("⚠️ placeMarketOrderWithBracket is deprecated - use placeLimitOrderWithBracket instead");
   await initProduct();
   const client = await getDeltaClient();
   const res = await client.apis.Orders.placeOrder({
     order: {
       product_id: PRODUCT_ID,
-      size: Math.floor(size), // Convert to integer (number of contracts)
+      size: Math.floor(size),
       side,
       order_type: "market_order",
       time_in_force: "ioc",
@@ -226,7 +292,8 @@ export const deltaClient = {
   getWalletBalance,
   setProductLeverage,
   placeMarketOrder,
-  placeMarketOrderWithBracket,
+  placeLimitOrderWithBracket, // NEW: Use this for trading signals
+  placeMarketOrderWithBracket, // DEPRECATED: Don't use
   cancelOrder,
   getOrderStatus,
   testConnection,
