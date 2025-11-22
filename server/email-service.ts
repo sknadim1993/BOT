@@ -1,42 +1,23 @@
 import { Resend } from 'resend';
 
-let connectionSettings: any;
+let resendClient: Resend | null = null;
 
-async function getCredentials() {
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY 
-    ? 'repl ' + process.env.REPL_IDENTITY 
-    : process.env.WEB_REPL_RENEWAL 
-    ? 'depl ' + process.env.WEB_REPL_RENEWAL 
-    : null;
-
-  if (!xReplitToken) {
-    throw new Error('X_REPLIT_TOKEN not found for repl/depl');
-  }
-
-  connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
-    {
-      headers: {
-        'Accept': 'application/json',
-        'X_REPLIT_TOKEN': xReplitToken
-      }
+function getResendClient() {
+  if (!resendClient) {
+    const apiKey = process.env.RESEND_API_KEY;
+    
+    if (!apiKey) {
+      throw new Error('RESEND_API_KEY environment variable is not set');
     }
-  ).then(res => res.json()).then(data => data.items?.[0]);
-
-  if (!connectionSettings || (!connectionSettings.settings.api_key)) {
-    throw new Error('Resend not connected');
+    
+    resendClient = new Resend(apiKey);
   }
-  return {apiKey: connectionSettings.settings.api_key, fromEmail: connectionSettings.settings.from_email};
+  
+  return resendClient;
 }
 
-async function getUncachableResendClient() {
-  const { apiKey, fromEmail } = await getCredentials();
-  return {
-    client: new Resend(apiKey),
-    fromEmail: fromEmail || 'noreply@smnahmed.info'
-  };
-}
+const FROM_EMAIL = 'noreply@smnahmed.info';
+const TO_EMAIL = 'contact@smnahmed.info';
 
 interface TradeNotification {
   symbol: string;
@@ -56,11 +37,11 @@ interface TradeClosedNotification extends TradeNotification {
 
 export async function sendTradeExecutedEmail(trade: TradeNotification) {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const client = getResendClient();
     
     await client.emails.send({
-      from: fromEmail,
-      to: [process.env.SUPPORT_EMAIL || 'noreply@smnahmed.info'],
+      from: FROM_EMAIL,
+      to: [TO_EMAIL],
       subject: `🚀 Trade Executed: ${trade.direction.toUpperCase()} ${trade.symbol}`,
       html: `
         <h2>Trade Executed</h2>
@@ -75,21 +56,21 @@ export async function sendTradeExecutedEmail(trade: TradeNotification) {
       `,
     });
 
-    console.log('Trade executed email sent');
+    console.log('✅ Trade executed email sent');
   } catch (error) {
-    console.error('Failed to send trade executed email:', error);
+    console.error('❌ Failed to send trade executed email:', error);
   }
 }
 
 export async function sendTradeClosedEmail(trade: TradeClosedNotification) {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const client = getResendClient();
     const pnl = parseFloat(trade.pnl);
     const isProfit = pnl >= 0;
     
     await client.emails.send({
-      from: fromEmail,
-      to: [process.env.SUPPORT_EMAIL || 'noreply@smnahmed.info'],
+      from: FROM_EMAIL,
+      to: [TO_EMAIL],
       subject: `${isProfit ? '✅' : '❌'} Trade Closed: ${trade.symbol} - ${isProfit ? 'Profit' : 'Loss'} $${Math.abs(pnl).toFixed(2)}`,
       html: `
         <h2>Trade Closed</h2>
@@ -103,9 +84,9 @@ export async function sendTradeClosedEmail(trade: TradeClosedNotification) {
       `,
     });
 
-    console.log('Trade closed email sent');
+    console.log('✅ Trade closed email sent');
   } catch (error) {
-    console.error('Failed to send trade closed email:', error);
+    console.error('❌ Failed to send trade closed email:', error);
   }
 }
 
@@ -125,12 +106,12 @@ interface DailyReport {
 
 export async function sendDailyReport(report: DailyReport) {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const client = getResendClient();
     const isProfit = report.totalPnl >= 0;
     
     await client.emails.send({
-      from: fromEmail,
-      to: [process.env.SUPPORT_EMAIL || 'noreply@smnahmed.info'],
+      from: FROM_EMAIL,
+      to: [TO_EMAIL],
       subject: `📊 Daily Trading Report - ${report.date}`,
       html: `
         <h2>Daily Trading Report</h2>
@@ -152,8 +133,8 @@ export async function sendDailyReport(report: DailyReport) {
       `,
     });
 
-    console.log('Daily report email sent');
+    console.log('✅ Daily report email sent');
   } catch (error) {
-    console.error('Failed to send daily report email:', error);
+    console.error('❌ Failed to send daily report email:', error);
   }
 }
