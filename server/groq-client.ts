@@ -106,7 +106,21 @@ Current: $${currentPrice}
 Selected LONG Entry: $${(currentPrice * 1.002).toFixed(2)} ✓ (0.2% from current)
 
 FORBIDDEN (NEVER DO THIS):
-Using swing highs/previous resistance levels that are >0.5% away from current price ✗`;
+Using swing highs/previous resistance levels that are >0.5% away from current price ✗
+
+You MUST respond with valid JSON matching this exact structure:
+{
+  "recommendedAsset": "string",
+  "direction": "long|short|none",
+  "entryPrice": number,
+  "stopLoss": number,
+  "takeProfit": number,
+  "confidence": number (1-100),
+  "strongestAssets": ["string"],
+  "weakestAssets": ["string"],
+  "patternExplanation": "string",
+  "multiTimeframeReasoning": "string"
+}`;
 
   const userPrompt = `CURRENT MARKET PRICE: $${currentPrice}
 
@@ -262,7 +276,7 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
   try {
     const client = getGroqClient();
 
-    // Use JSON Schema mode to enforce constraints
+    // Use llama-3.1-70b-versatile which supports JSON mode
     const completion = await client.chat.completions.create({
       messages: [
         {
@@ -274,58 +288,10 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
           content: userPrompt,
         },
       ],
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-70b-versatile',
       temperature: 0.1, // Very low temperature for deterministic output
       max_tokens: 1600,
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'trading_signal',
-          strict: true,
-          schema: {
-            type: 'object',
-            properties: {
-              recommendedAsset: { type: 'string' },
-              direction: { 
-                type: 'string',
-                enum: ['long', 'short', 'none']
-              },
-              entryPrice: { 
-                type: 'number',
-                description: 'Entry price must be within 0.5% of current price'
-              },
-              stopLoss: { type: 'number' },
-              takeProfit: { type: 'number' },
-              confidence: { 
-                type: 'integer',
-                minimum: 1,
-                maximum: 100
-              },
-              strongestAssets: {
-                type: 'array',
-                items: { type: 'string' }
-              },
-              weakestAssets: {
-                type: 'array',
-                items: { type: 'string' }
-              },
-              patternExplanation: { type: 'string' },
-              multiTimeframeReasoning: { type: 'string' }
-            },
-            required: [
-              'recommendedAsset',
-              'direction',
-              'entryPrice',
-              'stopLoss',
-              'takeProfit',
-              'confidence',
-              'patternExplanation',
-              'multiTimeframeReasoning'
-            ],
-            additionalProperties: false
-          }
-        }
-      }
+      response_format: { type: 'json_object' }
     });
 
     const response = completion.choices[0]?.message?.content;
