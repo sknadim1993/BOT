@@ -122,7 +122,7 @@ export async function getPositions() {
   return res?.data?.result || res?.result || res;
 }
 
-/* ---------------- GET OPEN POSITIONS (NEW - AUTHENTICATED & FIXED) ---------------- */
+/* ---------------- GET OPEN POSITIONS (FIXED - CORRECT SIGNATURE) ---------------- */
 export async function getOpenPositions() {
   await initProduct();
   
@@ -135,12 +135,13 @@ export async function getOpenPositions() {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const path = "/v2/positions";
   
-  // CRITICAL: Query string format for signature (no "?" prefix)
-  const queryString = `product_id=${PRODUCT_ID}`;
+  // CRITICAL FIX: For GET requests with URL params, query string is EMPTY for signature
+  // Delta Exchange does NOT include query params in signature for GET requests
+  const queryString = "";
   const payload = "";
 
   // Generate HMAC-SHA256 signature
-  // Signature format: METHOD + TIMESTAMP + PATH + QUERYSTRING + PAYLOAD
+  // Format: METHOD + TIMESTAMP + PATH (no query params!)
   const signatureData = method + timestamp + path + queryString + payload;
   const signature = crypto
     .createHmac("sha256", DELTA_API_SECRET)
@@ -159,7 +160,6 @@ export async function getOpenPositions() {
           "api-key": DELTA_API_KEY,
           "signature": signature,
           "timestamp": timestamp,
-          "User-Agent": "trading-bot",
         },
       }
     );
@@ -174,6 +174,15 @@ export async function getOpenPositions() {
 
     if (openPositions.length > 0) {
       console.log(`📊 Found ${openPositions.length} open position(s) on Delta Exchange`);
+      openPositions.forEach((pos: any, idx: number) => {
+        const symbol = pos.product_symbol || 'UNKNOWN';
+        const size = parseFloat(pos.size || "0");
+        const direction = size > 0 ? 'LONG' : 'SHORT';
+        const entryPrice = parseFloat(pos.entry_price || "0");
+        const unrealizedPnl = parseFloat(pos.unrealized_pnl || "0");
+        
+        console.log(`   ${idx + 1}. ${symbol} ${direction} | Size: ${Math.abs(size)} | Entry: $${entryPrice.toFixed(2)} | Unrealized PnL: $${unrealizedPnl.toFixed(2)}`);
+      });
     }
     
     return openPositions;
@@ -412,7 +421,7 @@ export const deltaClient = {
   getOrderbook,
   getCurrentPrice,
   getPositions,
-  getOpenPositions, // ✅ FIXED - Proper signature calculation
+  getOpenPositions, // ✅ FIXED - Correct signature without query params
   getWalletBalance,
   setProductLeverage,
   placeMarketOrder,
