@@ -110,24 +110,32 @@ function enforceRiskRewardAndSanitize(analysis: any, lastPrice: number, lastCand
   const bufferPct = dir === 'long' ? 0.0005 : 0.0005; // 0.05%
   const buffer = lastPrice * bufferPct;
 
-  // Start with the Groq suggested numbers but sanitize
-  let entry = Number(analysis.entryPrice || lastPrice + (dir === 'long' ? buffer : -buffer));
-  let stop = Number(analysis.stopLoss || (dir === 'long' ? (lastCandle ? lastCandle.low - buffer : lastPrice - buffer * 2) : (lastCandle ? lastCandle.high + buffer : lastPrice + buffer * 2)));
-
-  // Ensure entry is not unrealistically far from market
-  const deviation = Math.abs(entry - lastPrice) / lastPrice;
-  if (deviation > 0.01) {
-    // If Groq gave an entry >1% away, override to safe entry near market
-    entry = lastPrice + (dir === 'long' ? buffer : -buffer);
+  // CRITICAL: Force entry to be very close to current price
+  // Groq often uses old candle data, so we must override aggressively
+  const maxEntryDeviation = 0.003; // 0.3% maximum deviation from current price
+  
+  let entry = Number(analysis.entryPrice || lastPrice);
+  
+  // Check if Groq's entry is too far from current price
+  const entryDeviation = Math.abs(entry - lastPrice) / lastPrice;
+  
+  if (entryDeviation > maxEntryDeviation) {
+    console.warn(`⚠️ Groq entry ${entry} is ${(entryDeviation * 100).toFixed(2)}% from current ${lastPrice}. Overriding to current price.`);
+    // Force entry to be very close to current price
+    if (dir === 'long') {
+      entry = lastPrice * 1.0015; // 0.15% above current (wait for slight uptick)
+    } else {
+      entry = lastPrice * 0.9985; // 0.15% below current (wait for slight downtick)
+    }
   }
-
-  // Ensure SL is on the correct side of entry
-  if (dir === 'long' && stop >= entry) {
-    // place SL below entry
-    stop = Math.min(entry - Math.max(buffer, Math.abs(entry) * 0.0005), entry - 0.5);
-  }
-  if (dir === 'short' && stop <= entry) {
-    stop = Math.max(entry + Math.max(buffer, Math.abs(entry) * 0.0005), entry + 0.5);
+  
+  // Now calculate stop loss based on entry (not from Groq)
+  // For scalping: tight stops at 0.5% from entry
+  let stop: number;
+  if (dir === 'long') {
+    stop = entry * 0.995; // 0.5% below entry
+  } else {
+    stop = entry * 1.005; // 0.5% above entry
   }
 
   // Compute TP = entry + 2*(entry - SL) for long, inverse for short
