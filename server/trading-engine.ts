@@ -311,26 +311,65 @@ export async function monitorTrades() {
       }
 
       const tradeAge = Date.now() - new Date(trade.entryTime).getTime();
-      if (tradeAge < 10000) {
+      if (tradeAge < 30000) { // Increased to 30 seconds
         console.log(`⏳ Trade ${trade.id} too new (${Math.floor(tradeAge / 1000)}s), skipping`);
         continue;
       }
 
+      // Get order status
       const status = await deltaClient.getOrderStatus(trade.deltaOrderId);
       const state = status?.state || status?.status || null;
+      const unfilledSize = parseFloat(status?.unfilled_size || "0");
+      const filledSize = parseFloat(status?.size || "0") - unfilledSize;
 
-      console.log(`📋 Trade ${trade.id}: ${trade.symbol} ${trade.direction.toUpperCase()} | State: ${state}`);
+      console.log(`📋 Trade ${trade.id}: ${trade.symbol} ${trade.direction.toUpperCase()}`);
+      console.log(`   State: ${state} | Filled: ${filledSize}/${status?.size || 0} contracts`);
 
       if (!state) {
         console.log(`⚠️ No state found for trade ${trade.id}`);
         continue;
       }
 
-      if (state === "closed" && status.unfilled_size === 0) {
-        const fillPrice = parseFloat(status.average_fill_price || "0");
+      // CRITICAL FIX: Check positions instead of relying only on order state
+      // Delta Exchange marks parent order as "closed" even when bracket orders are active
+      let positions: any[] = [];
+      try {
+        positions = await deltaClient.getPositions();
+        console.log(`   Checking positions: ${positions.length} found`);
+      } catch (posErr) {
+        console.error(`⚠️ Failed to get positions for trade ${trade.id}`);
+      }
+
+      // Find if this trade has an active position
+      const activePosition = positions.find((pos: any) => {
+        const posSymbol = pos.product?.symbol || pos.symbol;
+        const posSize = Math.abs(parseFloat(pos.size || "0"));
+        return posSymbol === trade.symbol && posSize > 0;
+      });
+
+      if (activePosition) {
+        const posSize = Math.abs(parseFloat(activePosition.size || "0"));
+        const unrealizedPnl = parseFloat(activePosition.unrealized_pnl || activePosition.unrealized_profit_loss || "0");
+        
+        console.log(`   ✅ Active position found: ${posSize} contracts, Unrealized PnL: $${unrealizedPnl.toFixed(2)}`);
+        console.log(`   🔄 Trade is ACTIVE, waiting for SL/TP to trigger...`);
+        continue; // Position still active, don't close trade
+      }
+
+      // If no active position AND order is closed, then check if it was filled
+      if (state === "closed") {
+        // Order closed but no active position = SL or TP was hit
+        const fillPrice = parseFloat(status.average_fill_price || status.avg_fill_price || "0");
 
         if (!fillPrice || fillPrice === 0) {
-          console.log(`⚠️ Trade ${trade.id} closed but no fill price`);
+          console.log(`⚠️ Trade ${trade.id} closed but no fill price available`);
+          continue;
+        }
+
+        // Check if order was actually filled (not just cancelled)
+        if (filledSize === 0 || unfilledSize === parseFloat(status?.size || "0")) {
+          console.log(`❌ Trade ${trade.id} was cancelled or not filled`);
+          await storage.updateTrade(trade.id, { status: "cancelled" });
           continue;
         }
 
@@ -338,30 +377,37 @@ export async function monitorTrades() {
         const stopLoss = parseFloat(trade.stopLoss.toString());
         const takeProfit = parseFloat(trade.takeProfit.toString());
 
-        console.log(`💰 Trade ${trade.id} filled at ${fillPrice.toFixed(2)}`);
+        console.log(`💰 Trade ${trade.id} position closed at ${fillPrice.toFixed(2)}`);
 
+        // Determine if SL or TP was hit based on fill price
         let finalStatus = "closed";
         let exitPrice = fillPrice;
 
         if (trade.direction === "long") {
-          if (fillPrice <= stopLoss * 1.002) {
+          const distanceToSL = Math.abs(fillPrice - stopLoss);
+          const distanceToTP = Math.abs(fillPrice - takeProfit);
+          
+          if (distanceToSL < distanceToTP) {
             finalStatus = "sl_hit";
             exitPrice = stopLoss;
-            console.log(`🛑 Stop Loss hit`);
-          } else if (fillPrice >= takeProfit * 0.998) {
+            console.log(`🛑 Stop Loss hit for LONG trade`);
+          } else {
             finalStatus = "tp_hit";
             exitPrice = takeProfit;
-            console.log(`🎯 Take Profit hit`);
+            console.log(`🎯 Take Profit hit for LONG trade`);
           }
         } else {
-          if (fillPrice >= stopLoss * 0.998) {
+          const distanceToSL = Math.abs(fillPrice - stopLoss);
+          const distanceToTP = Math.abs(fillPrice - takeProfit);
+          
+          if (distanceToSL < distanceToTP) {
             finalStatus = "sl_hit";
             exitPrice = stopLoss;
-            console.log(`🛑 Stop Loss hit`);
-          } else if (fillPrice <= takeProfit * 1.002) {
+            console.log(`🛑 Stop Loss hit for SHORT trade`);
+          } else {
             finalStatus = "tp_hit";
             exitPrice = takeProfit;
-            console.log(`🎯 Take Profit hit`);
+            console.log(`🎯 Take Profit hit for SHORT trade`);
           }
         }
 
@@ -370,7 +416,7 @@ export async function monitorTrades() {
         console.log(`❌ Trade ${trade.id} was cancelled`);
         await storage.updateTrade(trade.id, { status: "cancelled" });
       } else {
-        console.log(`⏳ Trade ${trade.id} still pending (unfilled: ${status.unfilled_size || 0})`);
+        console.log(`⏳ Trade ${trade.id} still pending (state: ${state})`);
       }
     } catch (err: any) {
       console.error(`❌ Error monitoring trade ${trade.id}:`, err?.message || err);
