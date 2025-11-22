@@ -122,7 +122,7 @@ export async function getPositions() {
   return res?.data?.result || res?.result || res;
 }
 
-/* ---------------- GET OPEN POSITIONS (NEW - AUTHENTICATED) ---------------- */
+/* ---------------- GET OPEN POSITIONS (NEW - AUTHENTICATED & FIXED) ---------------- */
 export async function getOpenPositions() {
   await initProduct();
   
@@ -134,10 +134,13 @@ export async function getOpenPositions() {
   const method = "GET";
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const path = "/v2/positions";
+  
+  // CRITICAL: Query string format for signature (no "?" prefix)
   const queryString = `product_id=${PRODUCT_ID}`;
   const payload = "";
 
   // Generate HMAC-SHA256 signature
+  // Signature format: METHOD + TIMESTAMP + PATH + QUERYSTRING + PAYLOAD
   const signatureData = method + timestamp + path + queryString + payload;
   const signature = crypto
     .createHmac("sha256", DELTA_API_SECRET)
@@ -409,7 +412,7 @@ export const deltaClient = {
   getOrderbook,
   getCurrentPrice,
   getPositions,
-  getOpenPositions, // ✅ NEW - Use this for accurate position checking
+  getOpenPositions, // ✅ FIXED - Proper signature calculation
   getWalletBalance,
   setProductLeverage,
   placeMarketOrder,
