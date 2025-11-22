@@ -107,6 +107,64 @@ export async function executeTrade(signal: TradeSignal, settings: Settings) {
       }
     }
 
+    // ==== CRITICAL: CHECK CURRENT MARKET PRICE ====
+    let currentPrice: number;
+    try {
+      currentPrice = await deltaClient.getCurrentPrice();
+      console.log(`Current market price: ${currentPrice}`);
+    } catch (error) {
+      console.error("❌ Failed to get current market price, aborting trade.");
+      return null;
+    }
+
+    // Price deviation check: Entry must be within 2% of current price
+    const priceDeviation = Math.abs(signal.entryPrice - currentPrice) / currentPrice;
+    const maxDeviation = 0.02; // 2%
+
+    if (priceDeviation > maxDeviation) {
+      console.error(
+        `❌ ENTRY PRICE TOO FAR FROM MARKET: Entry ${signal.entryPrice} is ${(priceDeviation * 100).toFixed(2)}% away from current price ${currentPrice} (max ${maxDeviation * 100}%)`
+      );
+      return null;
+    }
+
+    // For LONG: current price must be BELOW entry (so limit order waits)
+    // For SHORT: current price must be ABOVE entry (so limit order waits)
+    if (signal.direction === "long") {
+      if (currentPrice >= signal.entryPrice) {
+        console.error(
+          `❌ CANNOT PLACE LONG LIMIT ORDER: Current price (${currentPrice}) is already at or above entry (${signal.entryPrice}). Order would fill immediately at worse price.`
+        );
+        return null;
+      }
+      // Also check that current price hasn't already hit stop loss
+      if (currentPrice <= signal.stopLoss) {
+        console.error(
+          `❌ CANNOT PLACE LONG: Current price (${currentPrice}) is already at or below stop loss (${signal.stopLoss})`
+        );
+        return null;
+      }
+    } else {
+      // SHORT
+      if (currentPrice <= signal.entryPrice) {
+        console.error(
+          `❌ CANNOT PLACE SHORT LIMIT ORDER: Current price (${currentPrice}) is already at or below entry (${signal.entryPrice}). Order would fill immediately at worse price.`
+        );
+        return null;
+      }
+      // Also check that current price hasn't already hit stop loss
+      if (currentPrice >= signal.stopLoss) {
+        console.error(
+          `❌ CANNOT PLACE SHORT: Current price (${currentPrice}) is already at or above stop loss (${signal.stopLoss})`
+        );
+        return null;
+      }
+    }
+
+    console.log(
+      `✅ Price validation passed: Entry ${signal.entryPrice} is valid for ${signal.direction.toUpperCase()} (current: ${currentPrice})`
+    );
+
     console.log(
       `Placing LIMIT ${side} order: ${quantity} contracts @ ${signal.entryPrice} with SL: ${signal.stopLoss}, TP: ${signal.takeProfit}`
     );
