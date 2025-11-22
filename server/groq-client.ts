@@ -276,7 +276,7 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
   try {
     const client = getGroqClient();
 
-    // Use llama-3.1-70b-versatile which supports JSON mode
+    // Use llama-3.3-70b-versatile which supports JSON mode
     const completion = await client.chat.completions.create({
       messages: [
         {
@@ -288,7 +288,7 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
           content: userPrompt,
         },
       ],
-      model: 'llama-3.1-70b-versatile',
+      model: 'llama-3.3-70b-versatile',
       temperature: 0.1, // Very low temperature for deterministic output
       max_tokens: 1600,
       response_format: { type: 'json_object' }
