@@ -529,3 +529,105 @@ async function updateDailyPerformance(asset: string, pnl: number) {
     largestLoss: largestLoss.toString(),
   });
 }
+
+/**
+ * Sync database trades with actual Delta Exchange positions
+ * Identifies ghost trades (in DB but not on Delta) and orphan positions (on Delta but not in DB)
+ */
+export async function syncTradesWithDelta() {
+  console.log('\n🔄 ===== SYNCING DATABASE WITH DELTA EXCHANGE =====\n');
+  
+  try {
+    // Get what database thinks is open
+    const dbTrades = await storage.getActiveTrades();
+    console.log(`📚 Database shows ${dbTrades.length} active trade(s)`);
+    
+    // Get what's actually open on Delta
+    const realPositions = await deltaClient.getOpenPositions();
+    console.log(`🏦 Delta Exchange shows ${realPositions.length} open position(s)`);
+    
+    if (dbTrades.length === 0 && realPositions.length === 0) {
+      console.log('✅ Database and Delta are in sync (no trades)');
+      return;
+    }
+    
+    let ghostCount = 0;
+    let orphanCount = 0;
+    let syncedCount = 0;
+    
+    // Check for ghost trades (in DB but not on Delta)
+    for (const trade of dbTrades) {
+      const matchingPosition = realPositions.find((pos: any) => {
+        const posSymbol = pos.product?.symbol || pos.symbol;
+        return posSymbol === trade.symbol;
+      });
+      
+      if (!matchingPosition) {
+        ghostCount++;
+        console.log(`\n👻 GHOST TRADE #${ghostCount}: ${trade.id}`);
+        console.log(`   Symbol: ${trade.symbol}`);
+        console.log(`   Direction: ${trade.direction.toUpperCase()}`);
+        console.log(`   Entry: $${trade.entryPrice}`);
+        console.log(`   Status in DB: ${trade.status}`);
+        console.log(`   Delta Order ID: ${trade.deltaOrderId || 'N/A'}`);
+        console.log(`   ❌ Position does NOT exist on Delta Exchange`);
+        console.log(`   🔧 Trade should have been closed but wasn't detected`);
+        
+        // Auto-close ghost trades
+        await storage.updateTrade(trade.id, { 
+          status: "cancelled",
+          exitPrice: trade.entryPrice, // Use entry as exit since position doesn't exist
+          exitTime: new Date(),
+          pnl: "0",
+          pnlPercentage: "0"
+        });
+        console.log(`   ✅ Auto-closed and marked as cancelled in database`);
+      } else {
+        syncedCount++;
+        const size = Math.abs(parseFloat(matchingPosition.size || "0"));
+        const unrealizedPnl = parseFloat(matchingPosition.unrealized_pnl || matchingPosition.unrealized_profit_loss || "0");
+        const entryPrice = parseFloat(matchingPosition.entry_price || "0");
+        
+        console.log(`\n✅ SYNCED TRADE: ${trade.id}`);
+        console.log(`   Symbol: ${trade.symbol}`);
+        console.log(`   Direction: ${trade.direction.toUpperCase()}`);
+        console.log(`   Size: ${size} contracts`);
+        console.log(`   Entry (DB): $${trade.entryPrice} | Entry (Delta): $${entryPrice.toFixed(2)}`);
+        console.log(`   Unrealized PnL: $${unrealizedPnl.toFixed(2)}`);
+      }
+    }
+    
+    // Check for orphan positions (on Delta but not in DB)
+    for (const position of realPositions) {
+      const posSymbol = position.product?.symbol || position.symbol;
+      const matchingTrade = dbTrades.find(trade => trade.symbol === posSymbol);
+      
+      if (!matchingTrade) {
+        orphanCount++;
+        const size = parseFloat(position.size || "0");
+        const direction = size > 0 ? 'LONG' : 'SHORT';
+        const entryPrice = parseFloat(position.entry_price || "0");
+        const unrealizedPnl = parseFloat(position.unrealized_pnl || position.unrealized_profit_loss || "0");
+        
+        console.log(`\n🔍 ORPHAN POSITION #${orphanCount}:`);
+        console.log(`   Symbol: ${posSymbol}`);
+        console.log(`   Direction: ${direction}`);
+        console.log(`   Size: ${Math.abs(size)} contracts`);
+        console.log(`   Entry: $${entryPrice.toFixed(2)}`);
+        console.log(`   Unrealized PnL: $${unrealizedPnl.toFixed(2)}`);
+        console.log(`   ❌ No matching trade found in database`);
+        console.log(`   🔧 Position exists on Delta but bot has no record of it`);
+        console.log(`   ⚠️ This may be from a manual trade or a previous bot session`);
+      }
+    }
+    
+    console.log(`\n📊 ===== SYNC SUMMARY =====`);
+    console.log(`✅ Synced trades: ${syncedCount}`);
+    console.log(`👻 Ghost trades (auto-closed): ${ghostCount}`);
+    console.log(`🔍 Orphan positions (no DB record): ${orphanCount}`);
+    console.log(`===========================\n`);
+    
+  } catch (error: any) {
+    console.error('❌ Error syncing trades:', error?.message || error);
+  }
+}
