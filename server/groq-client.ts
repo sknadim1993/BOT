@@ -66,7 +66,7 @@ function lastCandleFor(md: MarketData) {
   return md.ohlcv && md.ohlcv.length ? md.ohlcv[md.ohlcv.length - 1] : null;
 }
 
-function buildPrompt(marketData: MarketData[], tradingMode: string) {
+function buildPrompt(marketData: MarketData[], tradingMode: string, currentPrice: number) {
   const primaryTimeframe = TIMEFRAME_MAP[tradingMode] || '15m';
 
   const marketSections = marketData
@@ -78,23 +78,65 @@ function buildPrompt(marketData: MarketData[], tradingMode: string) {
     })
     .join('\n---\n');
 
-  // Get the latest close price from the most recent candle
-  const latestCandle = marketData.find(m => m.timeframe === primaryTimeframe)?.ohlcv?.slice(-1)[0];
-  const currentPrice = latestCandle ? latestCandle.close : 0;
+  // Calculate exact boundaries
+  const maxLongEntry = (currentPrice * 1.005).toFixed(2);
+  const minLongEntry = currentPrice.toFixed(2);
+  const maxShortEntry = currentPrice.toFixed(2);
+  const minShortEntry = (currentPrice * 0.995).toFixed(2);
 
-  const prompt = `You are an expert crypto trading analyst. Analyze the following multi-timeframe market data and provide ONE best trading recommendation.\n\nTRADING MODE: ${tradingMode.toUpperCase()} (Primary Timeframe: ${primaryTimeframe})\n\nCURRENT MARKET PRICE (LATEST CLOSE): $${currentPrice}\n\nMARKET DATA:\n${marketSections}\n\nANALYSIS REQUIREMENTS FOR ${tradingMode.toUpperCase()}:\n1. Trend strength across all timeframes\n2. Support/resistance levels\n3. Orderbook imbalances (buy walls vs sell walls)\n4. Volume patterns\n5. Candlestick patterns and wick behavior\n6. Breakouts vs fakeouts detection\n7. Momentum indicators\n8. Liquidity zones\n\nCRITICAL RULES FOR ENTRY PRICE (MUST OBEY):\n- The CURRENT MARKET PRICE is $${currentPrice} (from the most recent candle close)\n- Entry price MUST be within 0.5% of the current price $${currentPrice}\n- For LONG trades: Entry should be between $${(currentPrice * 1.000).toFixed(2)} and $${(currentPrice * 1.005).toFixed(2)}\n- For SHORT trades: Entry should be between $${(currentPrice * 0.995).toFixed(2)} and $${(currentPrice * 1.000).toFixed(2)}\n- If no valid setup exists within this range, return direction = "none" with confidence < 60\n\nOTHER RULES:\n- Stop-loss MUST be based on recent swing low/high:\n  • LONG → stop-loss BELOW recent swing low (but not more than 1% from entry)\n  • SHORT → stop-loss ABOVE recent swing high (but not more than 1% from entry)\n- Take-profit MUST use 1:2 risk-reward ratio (TP is 2× distance from entry to SL)\n- For scalping, use tight stops (0.3-0.5% from entry)\n- Only recommend trades with confluence across multiple timeframes\n- Output EXACTLY one JSON object (no extra commentary)\n\nRESPONSE JSON FORMAT EXAMPLE (MUST MATCH TYPES):\n{\n  "recommendedAsset": "ETHUSD",\n  "direction": "long",\n  "entryPrice": ${currentPrice > 0 ? (currentPrice * 1.002).toFixed(2) : '2740.00'},\n  "stopLoss": ${currentPrice > 0 ? (currentPrice * 0.995).toFixed(2) : '2720.00'},\n  "takeProfit": ${currentPrice > 0 ? (currentPrice * 1.016).toFixed(2) : '2780.00'},\n  "confidence": 75,\n  "strongestAssets": ["ETHUSD"],\n  "weakestAssets": [],\n  "patternExplanation": "Bullish pattern on 5m with volume confirmation near current price $${currentPrice}",\n  "multiTimeframeReasoning": "5m: Entry near current market price with tight risk management"\n}\n\nEND OF PROMPT.`;
+  const systemPrompt = `You are a crypto trading signal generator with MANDATORY numerical constraints.
 
-  return { prompt, primaryTimeframe };
+ABSOLUTE RULES (violation = system rejection):
+1. REFERENCE POINT: Current price $${currentPrice} is the ONLY anchor. NEVER use historical swing highs/lows.
+2. PERCENTAGE BOUNDS: Entry MUST be within 0.5% of current price.
+3. CALCULATION PROCESS:
+   - Current Price: $${currentPrice}
+   - For LONG: Entry between $${minLongEntry} and $${maxLongEntry}
+   - For SHORT: Entry between $${minShortEntry} and $${maxShortEntry}
+   
+EXECUTION ORDER:
+Step 1: State current price explicitly: $${currentPrice}
+Step 2: Calculate boundaries based on current price ONLY
+Step 3: Propose entry within boundaries
+Step 4: VERIFY: abs((entry - ${currentPrice}) / ${currentPrice} × 100) ≤ 0.5
+Step 5: Return structured JSON
+
+EXAMPLE (DO THIS):
+Current: $${currentPrice}
+Selected LONG Entry: $${(currentPrice * 1.002).toFixed(2)} ✓ (0.2% from current)
+
+FORBIDDEN (NEVER DO THIS):
+Using swing highs/previous resistance levels that are >0.5% away from current price ✗`;
+
+  const userPrompt = `CURRENT MARKET PRICE: $${currentPrice}
+
+MARKET DATA:
+${marketSections}
+
+TRADING MODE: ${tradingMode.toUpperCase()} (Primary Timeframe: ${primaryTimeframe})
+
+Generate a trading signal where entry is within 0.5% of $${currentPrice}.
+
+For LONG trades: entry between $${minLongEntry} and $${maxLongEntry}
+For SHORT trades: entry between $${minShortEntry} and $${maxShortEntry}
+
+If no valid setup exists within these bounds, return direction = "none" with confidence < 60.`;
+
+  return { systemPrompt, userPrompt, primaryTimeframe };
 }
 
-function enforceRiskRewardAndSanitize(analysis: any, lastPrice: number, lastCandle: OHLCV | null): TradingRecommendation {
+function enforceRiskRewardAndSanitize(analysis: any, currentPrice: number, lastCandle: OHLCV | null): TradingRecommendation {
+  console.log('\n=== SANITIZATION LAYER ===');
+  console.log('Groq raw response:', JSON.stringify(analysis, null, 2));
+  console.log('Current market price:', currentPrice);
+  
   // Defensive default
   const defaultNoTrade: TradingRecommendation = {
     recommendedAsset: analysis?.recommendedAsset || 'UNKNOWN',
     direction: 'none',
-    entryPrice: lastPrice,
-    stopLoss: lastPrice,
-    takeProfit: lastPrice,
+    entryPrice: currentPrice,
+    stopLoss: currentPrice,
+    takeProfit: currentPrice,
     confidence: Math.max(1, Math.min(59, analysis?.confidence || 50)),
     strongestAssets: analysis?.strongestAssets || [],
     weakestAssets: analysis?.weakestAssets || [],
@@ -102,34 +144,41 @@ function enforceRiskRewardAndSanitize(analysis: any, lastPrice: number, lastCand
     multiTimeframeReasoning: analysis?.multiTimeframeReasoning || '',
   };
 
-  if (!analysis || !analysis.direction || analysis.direction === 'none') return defaultNoTrade;
+  if (!analysis || !analysis.direction || analysis.direction === 'none') {
+    console.log('Direction is none, returning no-trade');
+    return defaultNoTrade;
+  }
 
   const dir: Direction = analysis.direction === 'short' ? 'short' : 'long';
-
-  // Use lastPrice as market reference and a small buffer = 0.05% by default
-  const bufferPct = dir === 'long' ? 0.0005 : 0.0005; // 0.05%
-  const buffer = lastPrice * bufferPct;
+  console.log('Direction:', dir);
 
   // CRITICAL: Force entry to be very close to current price
-  // Groq often uses old candle data, so we must override aggressively
-  const maxEntryDeviation = 0.003; // 0.3% maximum deviation from current price
+  // Maximum 0.3% deviation allowed
+  const MAX_ENTRY_DEVIATION = 0.003; // 0.3%
   
-  let entry = Number(analysis.entryPrice || lastPrice);
+  let entry = Number(analysis.entryPrice || currentPrice);
+  console.log('Groq suggested entry:', entry);
   
   // Check if Groq's entry is too far from current price
-  const entryDeviation = Math.abs(entry - lastPrice) / lastPrice;
+  const entryDeviation = Math.abs(entry - currentPrice) / currentPrice;
+  console.log(`Entry deviation: ${(entryDeviation * 100).toFixed(3)}%`);
   
-  if (entryDeviation > maxEntryDeviation) {
-    console.warn(`⚠️ Groq entry ${entry} is ${(entryDeviation * 100).toFixed(2)}% from current ${lastPrice}. Overriding to current price.`);
-    // Force entry to be very close to current price
+  if (entryDeviation > MAX_ENTRY_DEVIATION) {
+    console.warn(`⚠️ OVERRIDE: Groq entry ${entry} is ${(entryDeviation * 100).toFixed(2)}% from current ${currentPrice}`);
+    
+    // FORCE override to safe entry near current price
     if (dir === 'long') {
-      entry = lastPrice * 1.0015; // 0.15% above current (wait for slight uptick)
+      entry = currentPrice * 1.0015; // 0.15% above current
+      console.log(`✓ Overridden to LONG entry: ${entry.toFixed(2)} (0.15% above current)`);
     } else {
-      entry = lastPrice * 0.9985; // 0.15% below current (wait for slight downtick)
+      entry = currentPrice * 0.9985; // 0.15% below current
+      console.log(`✓ Overridden to SHORT entry: ${entry.toFixed(2)} (0.15% below current)`);
     }
+  } else {
+    console.log(`✓ Entry ${entry} is within acceptable range`);
   }
   
-  // Now calculate stop loss based on entry (not from Groq)
+  // Calculate stop loss based on entry (not from Groq)
   // For scalping: tight stops at 0.5% from entry
   let stop: number;
   if (dir === 'long') {
@@ -137,6 +186,7 @@ function enforceRiskRewardAndSanitize(analysis: any, lastPrice: number, lastCand
   } else {
     stop = entry * 1.005; // 0.5% above entry
   }
+  console.log('Calculated stop loss:', stop.toFixed(2));
 
   // Compute TP = entry + 2*(entry - SL) for long, inverse for short
   let tp: number;
@@ -147,6 +197,7 @@ function enforceRiskRewardAndSanitize(analysis: any, lastPrice: number, lastCand
     const rr = stop - entry; // risk for short (positive)
     tp = entry - Math.abs(rr) * 2;
   }
+  console.log('Calculated take profit:', tp.toFixed(2));
 
   // Confidence clamp
   let confidence = Math.round(Number(analysis.confidence || 50));
@@ -155,6 +206,7 @@ function enforceRiskRewardAndSanitize(analysis: any, lastPrice: number, lastCand
 
   // If the adjusted entry/SL/TP are nonsensical (e.g., equal), return no-trade
   if (!isFinite(entry) || !isFinite(stop) || !isFinite(tp) || Math.abs(entry - stop) < 0.0001) {
+    console.error('❌ Invalid price calculations, returning no-trade');
     return defaultNoTrade;
   }
 
@@ -171,6 +223,13 @@ function enforceRiskRewardAndSanitize(analysis: any, lastPrice: number, lastCand
     multiTimeframeReasoning: analysis.multiTimeframeReasoning || '',
   };
 
+  console.log('Final sanitized result:', {
+    direction: result.direction,
+    entry: result.entryPrice,
+    sl: result.stopLoss,
+    tp: result.takeProfit
+  });
+
   return result;
 }
 
@@ -181,27 +240,92 @@ function marketReferenceAssetFromAnalysis(analysis: any): string {
 }
 
 export async function analyzeMarkets(marketData: MarketData[], tradingMode: string): Promise<TradingRecommendation> {
-  const { prompt, primaryTimeframe } = buildPrompt(marketData, tradingMode);
+  console.log('\n=== GROQ ANALYSIS START ===');
+  
+  // Get current price from latest candle
+  const primaryTimeframe = TIMEFRAME_MAP[tradingMode] || '15m';
+  const primaryMarket = marketData.find((m) => m.timeframe === primaryTimeframe) || marketData[0];
+  const lastCandle = primaryMarket ? lastCandleFor(primaryMarket) : null;
+  const currentPrice = lastCandle ? lastCandle.close : 0;
+
+  if (!currentPrice || !isFinite(currentPrice)) {
+    throw new Error('Unable to determine current market price from provided market data.');
+  }
+
+  console.log('Current market price:', currentPrice);
+  console.log('Max allowed entry deviation: 0.5%');
+  console.log('LONG entry range:', `${currentPrice.toFixed(2)} - ${(currentPrice * 1.005).toFixed(2)}`);
+  console.log('SHORT entry range:', `${(currentPrice * 0.995).toFixed(2)} - ${currentPrice.toFixed(2)}`);
+
+  const { systemPrompt, userPrompt, primaryTimeframe: ptf } = buildPrompt(marketData, tradingMode, currentPrice);
 
   try {
     const client = getGroqClient();
 
+    // Use JSON Schema mode to enforce constraints
     const completion = await client.chat.completions.create({
       messages: [
         {
           role: 'system',
-          content: 'You are a professional crypto trading analyst specializing in multi-timeframe technical analysis. Always respond with valid JSON only, no additional text.',
+          content: systemPrompt,
         },
         {
           role: 'user',
-          content: prompt,
+          content: userPrompt,
         },
       ],
       model: 'llama-3.3-70b-versatile',
-      temperature: 0.15,
+      temperature: 0.1, // Very low temperature for deterministic output
       max_tokens: 1600,
-      // Use Groq's structured response format if available
-      response_format: { type: 'json_object' },
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'trading_signal',
+          strict: true,
+          schema: {
+            type: 'object',
+            properties: {
+              recommendedAsset: { type: 'string' },
+              direction: { 
+                type: 'string',
+                enum: ['long', 'short', 'none']
+              },
+              entryPrice: { 
+                type: 'number',
+                description: 'Entry price must be within 0.5% of current price'
+              },
+              stopLoss: { type: 'number' },
+              takeProfit: { type: 'number' },
+              confidence: { 
+                type: 'integer',
+                minimum: 1,
+                maximum: 100
+              },
+              strongestAssets: {
+                type: 'array',
+                items: { type: 'string' }
+              },
+              weakestAssets: {
+                type: 'array',
+                items: { type: 'string' }
+              },
+              patternExplanation: { type: 'string' },
+              multiTimeframeReasoning: { type: 'string' }
+            },
+            required: [
+              'recommendedAsset',
+              'direction',
+              'entryPrice',
+              'stopLoss',
+              'takeProfit',
+              'confidence',
+              'patternExplanation',
+              'multiTimeframeReasoning'
+            ],
+            additionalProperties: false
+          }
+        }
+      }
     });
 
     const response = completion.choices[0]?.message?.content;
@@ -209,59 +333,66 @@ export async function analyzeMarkets(marketData: MarketData[], tradingMode: stri
       throw new Error('No response from Groq');
     }
 
-    // If the SDK already returns a parsed object, use it. Otherwise try JSON.parse
-    let analysis: any = response;
+    console.log('Groq raw response received');
+
+    // Parse JSON response
+    let analysis: any;
     if (typeof response === 'string') {
       try {
         analysis = JSON.parse(response);
       } catch (err) {
-        // if parsing fails, throw
         throw new Error('Groq returned invalid JSON');
       }
+    } else {
+      analysis = response;
     }
 
-    // Determine the most relevant market reference (primary timeframe & matching asset)
-    const recommendedAsset = analysis.recommendedAsset || marketData[0]?.symbol;
-    const primaryMarket = marketData.find((m) => m.symbol === recommendedAsset && m.timeframe === primaryTimeframe) || marketData.find((m) => m.timeframe === primaryTimeframe) || marketData[0];
-    const lastCandle = primaryMarket ? lastCandleFor(primaryMarket) : null;
-    const lastPrice = lastCandle ? lastCandle.close : primaryMarket && lastCandleFor(primaryMarket) ? lastCandleFor(primaryMarket)!.close : marketData[0] && lastCandleFor(marketData[0]) ? lastCandleFor(marketData[0])!.close : NaN;
+    // CRITICAL: Apply sanitization (this returns a NEW object)
+    const sanitized = enforceRiskRewardAndSanitize(analysis, currentPrice, lastCandle);
 
-    if (!isFinite(lastPrice)) {
-      throw new Error('Unable to determine last market price from provided market data.');
-    }
-
-    const sanitized = enforceRiskRewardAndSanitize(analysis, lastPrice, lastCandle);
-
-    // Final sanity check: ensure entry is within 1% of lastPrice (as required)
+    console.log('\n=== FINAL VALIDATION ===');
+    console.log('Sanitized direction:', sanitized.direction);
+    console.log('Sanitized entry:', sanitized.entryPrice);
+    
+    // Final safety check: ensure entry is within acceptable bounds
     if (sanitized.direction !== 'none') {
-      const deviation = Math.abs(sanitized.entryPrice - lastPrice) / lastPrice;
-      if (deviation > 0.01) {
-        // If still outside 1% after adjustments, downgrade to no-trade
+      const finalDeviation = Math.abs(sanitized.entryPrice - currentPrice) / currentPrice;
+      console.log(`Final entry deviation: ${(finalDeviation * 100).toFixed(3)}%`);
+      
+      if (finalDeviation > 0.01) {
+        console.error(`❌ SAFETY BLOCK: Final entry ${sanitized.entryPrice} is ${(finalDeviation * 100).toFixed(2)}% from current ${currentPrice}`);
+        
+        // If still outside 1% after sanitization, return no-trade
         return {
           recommendedAsset: sanitized.recommendedAsset,
           direction: 'none',
-          entryPrice: lastPrice,
-          stopLoss: lastPrice,
-          takeProfit: lastPrice,
+          entryPrice: currentPrice,
+          stopLoss: currentPrice,
+          takeProfit: currentPrice,
           confidence: Math.max(1, Math.min(59, sanitized.confidence)),
           strongestAssets: sanitized.strongestAssets,
           weakestAssets: sanitized.weakestAssets,
-          patternExplanation: 'No safe entry within 1% of market price after sanitization',
+          patternExplanation: 'No safe entry within acceptable deviation from market price',
           multiTimeframeReasoning: sanitized.multiTimeframeReasoning,
         };
       }
+      
+      console.log('✓ Final validation passed');
     }
 
+    console.log('=== GROQ ANALYSIS COMPLETE ===\n');
     return sanitized;
+    
   } catch (error: any) {
     console.error('Groq analysis error:', error?.message || error);
+    
     // Return a safe no-trade recommendation rather than crash the system
     return {
       recommendedAsset: marketData[0]?.symbol || 'UNKNOWN',
       direction: 'none',
-      entryPrice: marketData[0] && lastCandleFor(marketData[0]) ? lastCandleFor(marketData[0])!.close : 0,
-      stopLoss: marketData[0] && lastCandleFor(marketData[0]) ? lastCandleFor(marketData[0])!.close : 0,
-      takeProfit: marketData[0] && lastCandleFor(marketData[0]) ? lastCandleFor(marketData[0])!.close : 0,
+      entryPrice: currentPrice,
+      stopLoss: currentPrice,
+      takeProfit: currentPrice,
       confidence: 30,
       strongestAssets: [],
       weakestAssets: [],
